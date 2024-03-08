@@ -71,6 +71,17 @@ def directory_exists(directory: str) -> bool:
     return os.path.exists(directory) and os.path.isdir(directory)
 
 
+def files_exist_in_dir(directory: str, list_filenames: list[str]) -> bool:
+
+    # get list of files in the directory
+    list_dir = os.listdir(path=directory)
+
+    # check that all the files in list_filenames are in the directory
+    all_in_dir = all([True for file in list_filenames if file in list_dir])
+
+    return all_in_dir
+
+
 def orbis_data_files_exist(orbis_data_dir: str) -> bool:
     """Checks whether at least one Orbis export as Excel file exists in the given directory."""
 
@@ -119,7 +130,7 @@ def orbis_resource_files_exist(orbis_res_dir: str) -> bool:
 
 def tilt_data_files_exist(tilt_data_dir: str) -> bool:
     """Checks whether the expected tilt data files exist in the given directory"""
-    filenames = [
+    list_filenames = [
         # "categories.csv",
         "categories_companies.csv",
         # "categories_sector_ecoinvent_delimited.csv",
@@ -142,17 +153,19 @@ def tilt_data_files_exist(tilt_data_dir: str) -> bool:
         # "sector_ecoinvent_delimited_sector_ecoinvent.csv",
     ]
 
-    tilt_data_files = os.listdir(path=tilt_data_dir)
-    counter = 0
+    return files_exist_in_dir(directory=tilt_data_dir, list_filenames=list_filenames)
 
-    for file in filenames:
-        if file in tilt_data_files:
-            counter += 1
 
-    if counter != len(filenames):
-        return False
+def ecoinvent_resource_files_exist(ecoinvent_res_dir: str) -> bool:
+    list_filenames = [
+        "20231121_mapper_ep_ei.csv",
+        "ep_companies_NL.csv",
+        "ecoinvent_complete.csv",
+    ]
 
-    return True
+    return files_exist_in_dir(
+        directory=ecoinvent_res_dir, list_filenames=list_filenames
+    )
 
 
 def make_md5_uuid(name: str) -> str:

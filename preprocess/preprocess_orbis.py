@@ -1,13 +1,11 @@
 from dotenv import load_dotenv
 
-import pandas as pd
-
 import preprocess_utils as utils
+import pandas as pd
 
 import os
 import sys
 import argparse
-import string
 
 
 def all_files_exist(dir_dict: dict) -> bool:
@@ -39,7 +37,7 @@ def all_files_exist(dir_dict: dict) -> bool:
         elif k == "resource":
             print("> Checking if additional resources exists")
             # checks if all mapper files exist in the mapper dir
-            if not utils.orbis_mapper_files_exist(dir_dict["resource"]):
+            if not utils.orbis_resource_files_exist(dir_dict["resource"]):
                 return False
 
     return True
@@ -128,10 +126,18 @@ def clean_orbis_export(list_df: list[pd.DataFrame], mapper_dir: str) -> pd.DataF
     return orbis
 
 
-def create_companies_id(orbis_df):
+def create_companies_id(orbis_df: pd.DataFrame) -> pd.DataFrame:
+    """Create unique id for each company in Orbis DataFrame in `companies_id` column
 
-    def create_uuid(company_name):
-        # lower case name
+    Args:
+        orbis_df (pd.DataFrame): Orbis DataFrame
+
+    Returns:
+        pd.DataFrame: Orbis DataFrame with new column `companies_id`
+    """
+
+    def create_uuid(company_name: str) -> str:
+        # create md5 uuid based on the company name
         company_name = company_name.lower()
 
         return utils.make_md5_uuid(company_name)
@@ -141,13 +147,24 @@ def create_companies_id(orbis_df):
     return orbis_df
 
 
-def remove_source_name(orbis_df):
+def remove_source_name(orbis_df: pd.DataFrame) -> pd.DataFrame:
+    """Remove source name from the `products_and_services` column of Orbis
+
+    Args:
+        orbis_df (pd.DataFrame): Orbis DataFrame
+
+    Returns:
+        pd.DataFrame: Orbis DataFrame with source removed from products_and_services
+    """
+
     def remove_source(text):
+        # sources are mentioned as [source: <name>]
         return text.split("[")[0].strip()
 
     orbis_df["products_and_services"] = orbis_df["products_and_services"].apply(
         remove_source
     )
+
     return orbis_df
 
 
@@ -174,7 +191,7 @@ def preprocess_orbis(data_dir: str, resource_dir: str, save_dir: str) -> pd.Data
     # clean up orbis export to exclude unnecessary rows, columns
     data = clean_orbis_export(data, resource_dir)
 
-    # add tilt-like companies_id
+    # add companies_id
     data = create_companies_id(data)
 
     num_rows = len(data)
@@ -185,6 +202,24 @@ def preprocess_orbis(data_dir: str, resource_dir: str, save_dir: str) -> pd.Data
     data.to_csv(save_filename, index=False)
 
     return data
+
+
+def run(data_dir: str, res_dir: str, save_dir: str):
+    """Run preprocessing for Orbis
+
+    Args:
+        data_dir (str): Directory where the raw data files are
+        res_dir (str): Directory where all resource files are
+        save_dir (str): Directory where processed files should be saved
+    """
+
+    # check that all the necessary files exist
+    dir_dict = {"data": data_dir, "resource": res_dir, "save": save_dir}
+    if not all_files_exist(dir_dict=dir_dict):
+        print("You're missing files to run preprocessing")
+        sys.exit(0)
+
+    preprocess_orbis(data_dir=data_dir, resource_dir=res_dir, save_dir=save_dir)
 
 
 if __name__ == "__main__":
@@ -208,24 +243,8 @@ if __name__ == "__main__":
         help="Directory where processed files should be saved",
     )
 
-    print("Preprocess Orbis")
-
-    # make sure that env file is there
-    env_loaded = load_dotenv()
-    if not env_loaded:
-        print(
-            "Your environment variables could not be loaded. Check that you have a .env file."
-        )
-        sys.exit(0)
+    print("!!Preprocess Orbis!!")
 
     args = parser.parse_args()
 
-    # check that all the necessary files exist
-    dir_dict = {"data": args.data_dir, "resource": args.res_dir, "save": args.save_dir}
-    if not all_files_exist(dir_dict=dir_dict):
-        print("You're missing files to run preprocessing")
-        sys.exit(0)
-
-    preprocess_orbis(
-        data_dir=args.data_dir, resource_dir=args.res_dir, save_dir=args.save_dir
-    )
+    run(args.data_dir, args.res_dir, args.save_dir)

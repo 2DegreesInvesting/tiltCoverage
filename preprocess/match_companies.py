@@ -173,3 +173,90 @@ def find_matching_companies(
         companies_id_mapper[id_other] = id_tilt
 
     return companies_id_mapper
+
+
+def pseudocode(df_tilt: pd.DataFrame, df_orbis: pd.DataFrame):
+
+    tilt_postcode_groups = df_tilt.groupby("postcode").groups
+
+    orbis_postcode = df_orbis.postcode.unique()
+
+    # TODO what is the best way to keep track of the matches?
+    matches = {}
+
+    # iterate over tilt companies grouped by postcodes
+    for postcode in tilt_postcode_groups:
+        postcode_row_idx = tilt_postcode_groups[postcode]
+        tilt_postcode_group = df_tilt.loc[postcode_row_idx]
+
+        # tilt company does not exist in orbis, therefore no match found
+        if postcode not in orbis_postcode:
+            continue
+
+        orbis_postcode_group = df_orbis[df_orbis.postcode == postcode]
+
+        if len(orbis_postcode_group) == 1:
+            # create pairs against the rows that have names with the same alphabet,
+            # sim check that name passes, if so, it is a match!
+            # sim check should include that the fist three letters also match!!!!!!!!!!!!!!!!!
+            # TODO name check
+            continue
+
+        # there are multiple orbis companies with the same postcodes - let the many to many matching commence
+        find_postcode_match(postcode, tilt_postcode_group, orbis_postcode_group)
+
+
+def find_postcode_match(tilt_postcode, tilt_postcode_group, orbis_postcode_group):
+
+    tilt_names = tilt_postcode_group.company_name.tolist()
+    orbis_names = orbis_postcode_group.company_name.tolist()
+
+    tilt_dict = alphabetise(tilt_names)
+    tilt_alpha = list(tilt_dict.keys())
+
+    orbis_dict = alphabetise(orbis_names, reference_list=tilt_alpha)
+
+    for letter in tilt_alpha:
+        name_pairs = create_pairs(tilt_dict[letter], orbis_dict[letter])
+        measure_similarity(name_pairs)
+        # check matches for the first three letters
+        # if sim score greater than 0.9 then same company <- sanity check ish
+
+    return
+
+
+def alphabetise(list_names: list[str], reference_list=[]) -> dict:
+    alphabet_dict = {}
+
+    for name in list_names:
+        letter = name.lower()[0]
+
+        if len(reference_list) > 0 and letter not in reference_list:
+            continue
+
+        if letter in alphabet_dict:
+            alphabet_dict[letter].append(name)
+        else:
+            alphabet_dict[letter] = [name]
+
+    return alphabet_dict
+
+
+def compute_sim_score(str_one, str_two):
+    return
+
+
+def measure_similarity(list_pairs, sim_threshold=0.9):
+    match_found = 0
+
+    for name_one, name_two in list_pairs:
+        if name_one[:3] == name_two[:3]:
+            # sanity check, if sim score
+            if compute_sim_score >= sim_threshold:
+                match_found += 1
+
+    return
+
+
+def create_pairs(list_one: list[str], list_two: list[str]) -> list[tuple[str]]:
+    return

@@ -5,13 +5,16 @@ import preprocess_utils as utils
 import pandas as pd
 
 import sys
+import os
 import argparse
 
 # for tiltData v1.1.0
 NL_COUNTRY_ID = "6ace185eedb813fe84c2eca7641f9fa0aa3bfdc3"
 
 
-def all_files_exist(data_dir):
+def all_files_exist(data_dir: str) -> bool:
+    """Checks that all the necessary tilt files exist"""
+
     print("Checking that all the necessary files exist")
     if not utils.tilt_data_files_exist(data_dir):
         return False
@@ -19,17 +22,35 @@ def all_files_exist(data_dir):
     return True
 
 
-def read_csv(filename, data_dir, columns=[]):
-    path = f"{data_dir}/{filename}.csv"
+def read_csv(table_name: str, data_dir: str, columns: list[str] = []) -> pd.DataFrame:
+    """Load CSV file as DataFrame.
 
+    Args:
+        table_name (str): Name of the table (name of the csv file without the extension)
+        data_dir (str): Directory of the table data file.
+        columns (list[str], optional): Columns to select from the table. Defaults to [].
+
+    Returns:
+        pd.DataFrame: Table loaded on to pandas DataFrame
+    """
+
+    # sanity check, in case extension is added to table name
+    if os.path.splitext(table_name)[-1] == ".csv":
+        raise RuntimeError(
+            "Non-existent table name. Check that you don't include the extension."
+        )
+
+    filename = f"{data_dir}/{table_name}.csv"
+
+    # if usecol columns are specified
     if len(columns) > 0:
-        return pd.read_csv(path, usecols=columns)
+        return pd.read_csv(filename, usecols=columns)
 
-    return pd.read_csv(path)
+    return pd.read_csv(filename)
 
 
 def format_postcode(postcode: str) -> str:
-    """Format input Tilt postcode into '1234 AB' style for consistency.
+    """Format input Tilt postcode into '1234 AB' style for consistency with Orbis.
 
     Args:
         postcode (str): Tilt postcode in
@@ -37,15 +58,27 @@ def format_postcode(postcode: str) -> str:
     Returns:
         str: Postcode in the format of '1234 AB'.
     """
-    assert len(postcode) == 6, f"Input postcode is WRONG: {postcode}"
 
-    num = postcode[:4]
-    alph = postcode[4:].upper()
-    return f"{num} {alph}"
+    # if postcode in 1234ab format
+    if len(postcode) == 6:
+        num = postcode[:4]
+        alph = postcode[4:].upper()
+
+    # else if postcode in 1234 ab format
+    else:
+        split = postcode.split()
+
+        assert len(split) == 2, "Unrecgonised postcode format"
+
+        num, alph = split
+
+    postcode = f"{num} {alph}"
+
+    return postcode
 
 
-def clean_postcode(tilt: pd.DataFrame) -> pd.DataFrame:
-    """Clean up inconsistent postcode and city syntax
+def unify_postcode(tilt: pd.DataFrame) -> pd.DataFrame:
+    """Clean up inconsistent postcode and city format
 
     Args:
         tilt (pd.DataFrame): DataFrame with 'postcode' and 'company_city' as columns.
@@ -91,13 +124,22 @@ def clean_postcode(tilt: pd.DataFrame) -> pd.DataFrame:
         new_postcode_list.append(format_postcode(orig_postcode))
         new_city_list.append(orig_city)
 
+    # assign as new postcode and city lists
     tilt.postcode = new_postcode_list
     tilt.company_city = new_city_list
 
     return tilt
 
 
-def get_ecoinvent_sectors(data_dir: str):
+def get_ecoinvent_sectors(data_dir: str) -> pd.DataFrame:
+    """Get DataFrame of ecoinvent sectors
+
+    Args:
+        data_dir (str): _description_
+
+    Returns:
+        pd.DataFrame: _description_
+    """
     ecoinvent_sectors = read_csv("sector_ecoinvent_delimited", data_dir)
     categories_ecoinvent_sectors = read_csv(
         "categories_sector_ecoinvent_delimited",
@@ -114,9 +156,19 @@ def get_ecoinvent_sectors(data_dir: str):
     return ecoinvent_sectors
 
 
-def get_tilt_main_activity(data_dir: str):
+def get_tilt_main_activity(data_dir: str) -> pd.DataFrame:
+    """Get the main activity table from tilt
 
-    tilt_activity_list = [
+    Args:
+        data_dir (str): Directory in which the main activity table file is.
+
+    Returns:
+        pd.DataFrame: EuroPages main activity table as DataFrame.
+    """
+
+    # list of main activities that we are concerned with
+    # NOTE: move to a file?
+    ep_activity_list = [
         "agent/ representative",
         "distributor",
         "manufacturer/ producer",
@@ -127,22 +179,31 @@ def get_tilt_main_activity(data_dir: str):
     main_activity = read_csv(
         "main_activity", data_dir, columns=["main_activity_id", "main_activity"]
     )
+
+    # set any other activity as other if not in the ep_activity_list
     main_activity["main_activity"] = main_activity["main_activity"].apply(
-        lambda x: x if x in tilt_activity_list else "other"
+        lambda x: x if x in ep_activity_list else "other"
     )
 
     return main_activity
 
 
-def merge_tilt_subsectors(dutch_companies):
+def merge_ep_subsectors(company_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge multiple rows of subsectors for each company into one row of a list
+    of subsectors.
 
-    tilt_subsectors = dutch_companies[["companies_id", "tilt_subsector"]].to_dict(
-        "records"
-    )
+    Args:
+        company_df (pd.DataFrame): _description_
+
+    Returns:
+        pd.DataFrame: _description_
+    """
+
+    subsectors = company_df[["companies_id", "tilt_subsector"]].to_dict("records")
 
     subsector_dict = {}
 
-    for item in tilt_subsectors:
+    for item in subsectors:
         company = item["companies_id"]
         subs = item["tilt_subsector"]
 
@@ -166,7 +227,17 @@ def merge_tilt_subsectors(dutch_companies):
     return df_tilt_subsectors
 
 
-def get_tilt_sector_subsector(data_dir, res_dir):
+def get_tilt_sector_subsector(data_dir: str, res_dir: str) -> pd.DataFrame:
+    """Get the sector and subsector table for tilt
+
+    Args:
+        data_dir (str): Directory where to find the sector table
+        res_dir (str): _description_
+
+    Returns:
+        pd.DataFrame: _description_
+    """
+
     list_sector_subsector = read_csv(
         "EP_tilt_sector_mapper",
         res_dir,
@@ -183,7 +254,7 @@ def get_tilt_sector_subsector(data_dir, res_dir):
     return sector_to_companies
 
 
-def read_tilt_data(data_dir, res_dir, save_dir):
+def preprocess_tilt(data_dir, res_dir, save_dir):
 
     # load tilt company data
     companies = read_csv("companies", data_dir)
@@ -216,22 +287,11 @@ def read_tilt_data(data_dir, res_dir, save_dir):
     dutch_companies = pd.merge(dutch_companies, ecoinvent_sectors, on="categories_id")
 
     # merge tilt subsectors into a list
-    df_tilt_subsectors = merge_tilt_subsectors(dutch_companies)
+    df_tilt_subsectors = merge_ep_subsectors(dutch_companies)
     dutch_companies = utils.exclude_col(dutch_companies, ["tilt_subsector"])
     dutch_companies.drop_duplicates(inplace=True)
 
     dutch_companies = pd.merge(dutch_companies, df_tilt_subsectors, on="companies_id")
-
-    # load and merge tilt list_products and services
-    # list_products = read("products")
-    # list_products_companies = read(
-    #     "products_companies", ["products_id", "companies_id"]
-    # )
-    # dutch_companies = pd.merge(
-    #     dutch_companies, list_products_companies, on="companies_id"
-    # )
-
-    # dutch_companies = pd.merge(dutch_companies, list_products, on="products_id")
 
     dutch_companies = utils.exclude_col(
         dutch_companies,
@@ -243,12 +303,25 @@ def read_tilt_data(data_dir, res_dir, save_dir):
         ],
     )
 
-    dutch_companies = clean_postcode(dutch_companies)
+    dutch_companies = unify_postcode(dutch_companies)
     dutch_companies.to_csv(f"{save_dir}/tilt.csv", index=False)
 
 
-def preprocess_tilt():
-    return
+def run(data_dir: str, res_dir: str, save_dir: str):
+    """Run preprocessing for tilt
+
+    Args:
+        data_dir (str): Directory where the raw data files are
+        res_dir (str): Directory where all resource files are
+        save_dir (str): Directory where processed files should be saved
+    """
+
+    # check that the necessary files exist
+    if not all_files_exist(data_dir=data_dir):
+        print("You're missing files to run preprocessing")
+        sys.exit(0)
+
+    preprocess_tilt(data_dir, res_dir, save_dir)
 
 
 if __name__ == "__main__":
@@ -267,10 +340,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # check that the mapper folder exists
-
-    if not all_files_exist(data_dir=args.data_dir):
-        print("You're missing files to run preprocessing")
-        sys.exit(0)
-
-    read_tilt_data(args.data_dir, args.res_dir, args.save_dir)
+    run(args.data_dir, args.res_dir, args.save_dir)
