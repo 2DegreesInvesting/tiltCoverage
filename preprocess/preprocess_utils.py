@@ -2,9 +2,10 @@ import json
 import os
 import uuid
 import pandas as pd
+import numpy as np
 
 
-def check_file_extension(filename: str, extension: str) -> None | RuntimeError:
+def check_file_extension(filename: str, extension: str):
     """Check if filename as the expected extension, otherwise raise RuntimeError"""
 
     ext = os.path.splitext(filename)[-1]
@@ -12,7 +13,7 @@ def check_file_extension(filename: str, extension: str) -> None | RuntimeError:
         raise RuntimeError(f"Expected a {extension} file, got {ext}.")
 
 
-def read_json(filename: str) -> dict | list:
+def read_json(filename: str):
     """Opens and loads JSON files"""
 
     check_file_extension(filename=filename, extension=".json")
@@ -23,7 +24,7 @@ def read_json(filename: str) -> dict | list:
     return data
 
 
-def write_json(filename: str, data: dict | list) -> None:
+def write_json(filename: str, data) -> None:
     """Creates a JSON file"""
 
     check_file_extension(filename=filename, extension=".json")
@@ -171,3 +172,10 @@ def ecoinvent_resource_files_exist(ecoinvent_res_dir: str) -> bool:
 def make_md5_uuid(name: str) -> str:
     """Make a UUID using a SHA-1 hash of a namespace UUID and a name"""
     return uuid.uuid5(uuid.NAMESPACE_DNS, name)
+
+
+def calculate_train_size(dataset_size: int, val_split: float) -> int:
+    train_split = 1 - val_split
+    train_size = round(dataset_size * train_split)
+
+    return train_size
