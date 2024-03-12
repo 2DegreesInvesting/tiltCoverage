@@ -1,7 +1,7 @@
 import pandas as pd
 from dotenv import load_dotenv
 
-import preprocess_utils as utils
+from . import preprocess_utils as utils
 import pandas as pd
 
 import sys
