@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 
 import pandas as pd
-import preprocess_utils as utils
+from . import preprocess_utils as utils
 
 import argparse
 import sys
@@ -22,8 +22,6 @@ def all_files_exist(dir_dict) -> bool:
     # create save directory if doesn't exist
     os.makedirs(dir_dict["save"], exist_ok=True)
 
-    print("> Checking if additional resources exists")
-
     # checks if all resource files exist in the resource dir
     return utils.ecoinvent_resource_files_exist(dir_dict["resource"])
 
@@ -40,6 +38,9 @@ def get_europages_ecoinvent_mapper(res_dir: str) -> pd.DataFrame:
     """
 
     ep_ei_mapper = pd.read_csv(f"{res_dir}/20231121_mapper_ep_ei.csv")
+    # focus on NL only
+    ep_ei_mapper = ep_ei_mapper[ep_ei_mapper.ep_country == "netherlands"]
+
     ep_companies = pd.read_csv(f"{res_dir}/ep_companies_NL.csv")
 
     # generate primary key 'group_var' to join tables
@@ -52,7 +53,9 @@ def get_europages_ecoinvent_mapper(res_dir: str) -> pd.DataFrame:
     )
 
     # join on primary key 'group_var'
-    ep_ei_mapper = pd.merge(ep_companies, ep_ei_mapper, on="group_var")
+    ep_ei_mapper = pd.merge(ep_companies, ep_ei_mapper, on="group_var").dropna(
+        subset=["completion"]
+    )
 
     # convert GPT certainty labels to numeric values
     completion_mapper = {"low": 1, "medium": 2, "high": 3}
@@ -61,6 +64,7 @@ def get_europages_ecoinvent_mapper(res_dir: str) -> pd.DataFrame:
     )
 
     # only keep rows with the highest certainty (highest may still be 'low')
+    # there are still at least one activity_uuid_product_uuid per company
     ep_ei_mapper = pd.DataFrame(
         ep_ei_mapper.groupby(["companies_id", "activity_uuid_product_uuid"])[
             "completion"
@@ -126,6 +130,7 @@ def preprocess_ecoinvent(res_dir: str, save_dir: str):
 
 
 def run(res_dir: str, save_dir: str):
+    print("Run preprocess ecoinvent")
 
     # check that all the necessary files exist
     dir_dict = {"resource": res_dir, "save": save_dir}
