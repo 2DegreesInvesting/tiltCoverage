@@ -9,11 +9,14 @@ def calculate_accuracy_numeric(labels: list, preds: list) -> float:
     return accuracy_score(labels, preds)
 
 
-def calculate_accuracy_textual(labels: list, preds: list) -> float:
-    print(len(labels), len(preds))
+def calculate_accuracy_textual(labels: list, preds: list, multi_label: bool) -> float:
+
     num_samples = len(preds)
 
-    correct = [1 for i in range(num_samples) if labels[i] == preds[i]]
+    if multi_label:
+        correct = [1 for i in range(num_samples) if preds[i] in labels[i]]
+    else:
+        correct = [1 for i in range(num_samples) if labels[i] == preds[i]]
 
     # return accuracy_score(labels, preds, sample_weight=sample_weights)
     return sum(correct) / num_samples
@@ -30,9 +33,11 @@ def calculate_f1(labels: list, preds: list) -> tuple[float, float, float]:
     return f1, precision, recall
 
 
-def calculate_accuracy(labels: list, preds: list, numeric: bool = True):
+def calculate_accuracy(
+    labels: list, preds: list, multi_label: bool, numeric: bool = True
+):
 
     if numeric:
         return calculate_accuracy_numeric(labels, preds)
 
-    return calculate_accuracy_textual(labels, preds)
+    return calculate_accuracy_textual(labels, preds, multi_label=multi_label)

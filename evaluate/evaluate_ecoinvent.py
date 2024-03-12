@@ -20,15 +20,13 @@ def evaluate_ecoinvent_method(method_name, input_prep_func, pred_func, data_dir)
     # prepare input data
     x = input_prep_func(x)
 
-    print(len(labels), len(x))
-
     # get prediction
     print(">Generating predictions")
     preds = pred_func(x)
 
     # get accuracy
     print(">Calculating prediction accuracy")
-    accuracy = calculate_accuracy(labels, preds, numeric=False)
+    accuracy = calculate_accuracy(labels, preds, multi_label=True, numeric=False)
     accuracy_percent = accuracy * 100
 
     print(f"{method_name} had {accuracy_percent:.2f}% accuracy")
