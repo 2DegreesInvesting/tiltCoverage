@@ -4,7 +4,7 @@ import json
 
 
 def read_labelled_data(data_dir: str):
-    with open(f"{data_dir}/orbis_ecoinvent_validation_dataset.json") as f:
+    with open(f"{data_dir}/orbis_ecoinvent_val_dataset.json") as f:
         data = json.load(f)
 
     return data["x"], data["y"]
