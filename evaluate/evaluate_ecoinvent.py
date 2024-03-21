@@ -10,19 +10,17 @@ def read_labelled_data(data_dir: str):
     return data["x"], data["y"]
 
 
-def evaluate_ecoinvent_method(method_name, input_prep_func, pred_func, data_dir):
+def evaluate_ecoinvent_method(method_name, predict, data_dir):
+
     print(f"Evaluating {method_name} on ecoinvent data")
 
     # read labelled data
     print(">Reading ecoinvent validation data")
     x, labels = read_labelled_data(data_dir)
 
-    # prepare input data
-    x = input_prep_func(x)
-
     # get prediction
     print(">Generating predictions")
-    preds = pred_func(x)
+    preds = predict(x)
 
     # get accuracy
     print(">Calculating prediction accuracy")
