@@ -1,15 +1,9 @@
 from itertools import product
 from difflib import SequenceMatcher
-from dotenv import load_dotenv
 
-import preprocess_utils as utils
+from . import preprocess_utils as utils
 import pandas as pd
 
-import sys
-import string
-import argparse
-import os
-import json
 import string
 
 
@@ -39,8 +33,8 @@ def find_common_postcode(df_one: pd.DataFrame, df_two: pd.DataFrame) -> list[str
 def alphabetise_company_names(names_dict: dict) -> dict:
     alpha_dict = {}
 
-    for index in names_dict:
-        company = names_dict[index]
+    for company in names_dict:
+        companies_id = company["companies_id"]
         name = company["company_name"].lower()
         postcode = company["postcode"]
 
@@ -48,9 +42,9 @@ def alphabetise_company_names(names_dict: dict) -> dict:
 
         if start_alphabet in alpha_dict:
 
-            alpha_dict[start_alphabet].append((name, postcode, index))
+            alpha_dict[start_alphabet].append((name, postcode, companies_id))
         else:
-            alpha_dict[start_alphabet] = [(name, postcode, index)]
+            alpha_dict[start_alphabet] = [(name, postcode, companies_id)]
 
     return alpha_dict
 
@@ -136,19 +130,26 @@ def find_matching_companies(
     df_tilt: pd.DataFrame, df_other: pd.DataFrame
 ) -> pd.DataFrame:
 
+    df_tilt = df_tilt.drop_duplicates(
+        subset=["companies_id", "company_name", "postcode"]
+    )
+    df_other = df_other.drop_duplicates(
+        subset=["companies_id", "company_name", "postcode"]
+    )
+
     # find the common postcodes between the dataframes
     common_postcode = find_common_postcode(df_tilt, df_other)
 
-    def get_company_info(df):
+    def alphabetise(df):
         df = df[df.postcode.isin(common_postcode)]
-        names_dict = df[["company_name", "postcode"]].to_dict(orient="index")
+        df_records = df.to_dict(orient="records")
 
         # DESIGN CHOICE: split the names into alphabetised list
-        alphabetised = alphabetise_company_names(names_dict)
+        alphabetised = alphabetise_company_names(df_records)
         return alphabetised
 
-    names_dict_tilt = get_company_info(df_tilt)
-    names_dict_other = get_company_info(df_other)
+    names_dict_tilt = alphabetise(df_tilt)
+    names_dict_other = alphabetise(df_other)
 
     alphabets = string.ascii_lowercase
 
@@ -156,107 +157,41 @@ def find_matching_companies(
     for letter in alphabets:
         pairs.extend(create_all_pairs(names_dict_tilt, names_dict_other, letter))
 
-    print("Finding matching companies")
     # find matching companies based on company name and postcode
-    matched_pairs_idx = find_matching_pairs(pairs)
+    print("Finding matching companies")
+    matched_companies_ids = find_matching_pairs(pairs)
 
     companies_id_mapper = {}
 
     # retrieve companies_id of matched_pairs
     # TODO: can optimise by taking care of it in find_matching_pairs
-    for tilt, other in matched_pairs_idx:
-        idx_tilt = tilt[-1]
-        idx_other = other[-1]
-        id_tilt = df_tilt.at[idx_tilt, "companies_id"]
-        id_other = df_other.at[idx_other, "companies_id"]
+    for tilt, other in matched_companies_ids:
+        companies_id_tilt = tilt[-1]
+        companies_id_other = other[-1]
 
-        companies_id_mapper[id_other] = id_tilt
+        companies_id_mapper[companies_id_other] = companies_id_tilt
 
     return companies_id_mapper
 
 
-def pseudocode(df_tilt: pd.DataFrame, df_orbis: pd.DataFrame):
+def join_ecoinvent_tilt(df_tilt, df_ecoinvent):
+    df_tilt = df_tilt[["companies_id", "company_name", "postcode"]]
+    ecoinvent_tilt = pd.merge(df_ecoinvent, df_tilt, on="companies_id", how="left")
 
-    tilt_postcode_groups = df_tilt.groupby("postcode").groups
-
-    orbis_postcode = df_orbis.postcode.unique()
-
-    # TODO what is the best way to keep track of the matches?
-    matches = {}
-
-    # iterate over tilt companies grouped by postcodes
-    for postcode in tilt_postcode_groups:
-        postcode_row_idx = tilt_postcode_groups[postcode]
-        tilt_postcode_group = df_tilt.loc[postcode_row_idx]
-
-        # tilt company does not exist in orbis, therefore no match found
-        if postcode not in orbis_postcode:
-            continue
-
-        orbis_postcode_group = df_orbis[df_orbis.postcode == postcode]
-
-        if len(orbis_postcode_group) == 1:
-            # create pairs against the rows that have names with the same alphabet,
-            # sim check that name passes, if so, it is a match!
-            # sim check should include that the fist three letters also match!!!!!!!!!!!!!!!!!
-            # TODO name check
-            continue
-
-        # there are multiple orbis companies with the same postcodes - let the many to many matching commence
-        find_postcode_match(postcode, tilt_postcode_group, orbis_postcode_group)
+    return ecoinvent_tilt
 
 
-def find_postcode_match(tilt_postcode, tilt_postcode_group, orbis_postcode_group):
+def join_orbis_tilt(df_ecoinvent: pd.DataFrame, df_orbis: pd.DataFrame) -> pd.DataFrame:
 
-    tilt_names = tilt_postcode_group.company_name.tolist()
-    orbis_names = orbis_postcode_group.company_name.tolist()
+    companies_id_mapper = find_matching_companies(df_ecoinvent, df_orbis)
 
-    tilt_dict = alphabetise(tilt_names)
-    tilt_alpha = list(tilt_dict.keys())
+    df_ecoinvent = df_ecoinvent.rename(columns={"companies_id": "companies_id_tilt"})
+    df_orbis = df_orbis.rename(columns={"companies_id": "companies_id_orbis"})
 
-    orbis_dict = alphabetise(orbis_names, reference_list=tilt_alpha)
+    df_orbis["companies_id_tilt"] = df_orbis["companies_id_orbis"].apply(
+        lambda x: companies_id_mapper.get(x, pd.NA)
+    )
 
-    for letter in tilt_alpha:
-        name_pairs = create_pairs(tilt_dict[letter], orbis_dict[letter])
-        measure_similarity(name_pairs)
-        # check matches for the first three letters
-        # if sim score greater than 0.9 then same company <- sanity check ish
+    df_orbis.dropna(axis="index", subset="companies_id_tilt", inplace=True)
 
-    return
-
-
-def alphabetise(list_names: list[str], reference_list=[]) -> dict:
-    alphabet_dict = {}
-
-    for name in list_names:
-        letter = name.lower()[0]
-
-        if len(reference_list) > 0 and letter not in reference_list:
-            continue
-
-        if letter in alphabet_dict:
-            alphabet_dict[letter].append(name)
-        else:
-            alphabet_dict[letter] = [name]
-
-    return alphabet_dict
-
-
-def compute_sim_score(str_one, str_two):
-    return
-
-
-def measure_similarity(list_pairs, sim_threshold=0.9):
-    match_found = 0
-
-    for name_one, name_two in list_pairs:
-        if name_one[:3] == name_two[:3]:
-            # sanity check, if sim score
-            if compute_sim_score >= sim_threshold:
-                match_found += 1
-
-    return
-
-
-def create_pairs(list_one: list[str], list_two: list[str]) -> list[tuple[str]]:
-    return
+    return df_orbis
