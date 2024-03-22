@@ -171,7 +171,7 @@ def ecoinvent_resource_files_exist(ecoinvent_res_dir: str) -> bool:
 
 def make_md5_uuid(name: str) -> str:
     """Make a UUID using a SHA-1 hash of a namespace UUID and a name"""
-    return uuid.uuid5(uuid.NAMESPACE_DNS, name)
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, name))
 
 
 def calculate_train_size(dataset_size: int, val_split: float) -> int:
