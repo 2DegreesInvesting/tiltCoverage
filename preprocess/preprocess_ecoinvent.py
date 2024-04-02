@@ -26,6 +26,33 @@ def all_files_exist(dir_dict) -> bool:
     return utils.ecoinvent_resource_files_exist(dir_dict["resource"])
 
 
+def ignore_geography(ei_df: pd.DataFrame, res_dir: str):
+    ei_df["ei_activity_id"] = ei_df["ei_activity"].apply(
+        lambda x: utils.make_md5_uuid(x)
+    )
+    ei_df["ei_product_id"] = ei_df["ei_product"].apply(lambda x: utils.make_md5_uuid(x))
+
+    ei_df["activity_id_product_id"] = [
+        "-".join([row["ei_activity_id"], row["ei_product_id"]])
+        for _, row in ei_df.iterrows()
+    ]
+
+    aipi_mapper = {}
+
+    unique_aipi = ei_df.activity_id_product_id.unique()
+
+    for aipi in unique_aipi:
+        aupu_geo = ei_df[ei_df.activity_id_product_id == aipi][
+            ["activity_uuid_product_uuid", "geo"]
+        ].to_dict("records")
+
+        aipi_mapper[aipi] = aupu_geo
+
+    utils.write_json(f"{res_dir}/aipi_aupu_geo_mapper.json", aipi_mapper)
+
+    return ei_df
+
+
 def get_europages_ecoinvent_mapper(res_dir: str) -> pd.DataFrame:
     """Join EuroPages company (NL) table with ecoinvent mapper table
 
@@ -79,8 +106,37 @@ def get_europages_ecoinvent_mapper(res_dir: str) -> pd.DataFrame:
     return ep_ei_mapper
 
 
+def get_ecoinvent_data(res_dir: str) -> pd.DataFrame:
+    ei_data = pd.read_csv(f"{res_dir}/ecoinvent_complete.csv").rename(
+        columns={
+            "Activity UUID & Product UUID": "activity_uuid_product_uuid",
+            "Activity Name": "ei_activity",
+            "Reference Product Name": "ei_product",
+            "Activity UUID": "ei_activity_uuid",
+            "Product UUID": "ei_product_uuid",
+            "Product Information": "ei_product_info",
+            "Geography": "geo",
+        }
+    )
+
+    # only keep relevant columns
+    ei_data = ei_data[
+        [
+            "activity_uuid_product_uuid",
+            "ei_activity",
+            "ei_product",
+            "ei_activity_uuid",
+            "ei_product_uuid",
+            "ei_product_info",
+            "geo",
+        ]
+    ]
+
+    return ei_data
+
+
 def get_ecoinvent_activity_product(
-    ep_ei_mapper: pd.DataFrame, res_dir: str
+    ep_ei_mapper: pd.DataFrame, ecoinvent_df: pd.DataFrame, res_dir: str
 ) -> pd.DataFrame:
     """Get the ecoinvent activity_uuid_product_uuid for the EuroPages companies.
 
@@ -91,27 +147,7 @@ def get_ecoinvent_activity_product(
     Returns:
         pd.DataFrame: _description_
     """
-    # get ecoinvent data table, rename columns
-    ei_data = pd.read_csv(f"{res_dir}/ecoinvent_complete.csv").rename(
-        columns={
-            "Activity UUID & Product UUID": "activity_uuid_product_uuid",
-            "Activity Name": "ei_activity",
-            "Reference Product Name": "ei_product",
-        }
-    )
-
-    # only keep relevant columns
-    ei_data = ei_data[
-        [
-            "activity_uuid_product_uuid",
-            "ei_activity",
-            "ei_product",
-        ]
-    ]
-
-    ep_ei_mapper = pd.merge(ep_ei_mapper, ei_data, on="activity_uuid_product_uuid")
-
-    return ep_ei_mapper
+    return pd.merge(ep_ei_mapper, ecoinvent_df, on="activity_uuid_product_uuid")
 
 
 def preprocess_ecoinvent(res_dir: str, save_dir: str):
@@ -120,13 +156,23 @@ def preprocess_ecoinvent(res_dir: str, save_dir: str):
     print("Getting EuroPages-ecoinvent mapper")
     ep_ei_mapper = get_europages_ecoinvent_mapper(res_dir)
 
+    ei_df = get_ecoinvent_data(res_dir)
+
     # map ecoinvent activities and products to europages companies_id
     print("Mapping ecoinvent activities and products to EuroPages companies")
-    ep_ei_companies = get_ecoinvent_activity_product(ep_ei_mapper, res_dir)
+    # ep_ei_companies = get_ecoinvent_activity_product(ep_ei_mapper, ei_df, res_dir)
+    ei_df = ignore_geography(ei_df, res_dir)
+    ep_ei_companies = pd.merge(ep_ei_mapper, ei_df, on="activity_uuid_product_uuid")
+    ep_ei_companies.drop(columns=["activity_uuid_product_uuid"], inplace=True)
+    ei_df.drop(
+        columns=["activity_uuid_product_uuid", "ei_activity_uuid", "ei_product_uuid"],
+        inplace=True,
+    )
 
+    ei_df.drop_duplicates(subset=["activity_id_product_id"], inplace=True)
+
+    ei_df.to_csv(f"{res_dir}/ecoinvent_complete_no_geo.csv", index=False)
     ep_ei_companies.to_csv(f"{save_dir}/ep_ei_companies.csv", index=False)
-
-    pass
 
 
 def run(res_dir: str, save_dir: str):
@@ -135,10 +181,10 @@ def run(res_dir: str, save_dir: str):
     # check that all the necessary files exist
     dir_dict = {"resource": res_dir, "save": save_dir}
     if not all_files_exist(dir_dict=dir_dict):
-        print("You're missing files to run preprocessing")
+        print("You're missing files to run preprocessing: ecoinvent")
         sys.exit(0)
 
-    pass
+    preprocess_ecoinvent(res_dir, save_dir)
 
 
 if __name__ == "__main__":
