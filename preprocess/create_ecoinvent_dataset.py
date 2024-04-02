@@ -32,7 +32,7 @@ def get_multi_labels(df_input, df_labels):
         return df_labels[df_labels.companies_id == cid]
 
     labels = [
-        get_cid_rows(cid)["activity_uuid_product_uuid"].unique().tolist()
+        get_cid_rows(cid)["activity_id_product_id"].unique().tolist()
         for cid in cid_tilt
     ]
 
