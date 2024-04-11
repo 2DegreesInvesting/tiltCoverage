@@ -20,8 +20,10 @@ def get_levenshtein_similarity(s1: str, s2: str) -> float:
     """
 
     # Levenshtein has the upper bound of the longest string of the two strings
-    # Lower bound of 0 (two strings are identical)
+    # and lower bound of 0 (two strings are identical)
     upper_bound = max(len(s1), len(s2))
+
+    # distance is integer
     levenshtein = distance(s1, s2)
 
     # take the ratio and subtract from one to denote similarity
@@ -53,6 +55,7 @@ def get_fuzzy_similarity(s1: str, s2: str) -> float:
         float: Similarity score between (not the same) and 1.0 (identical)
     """
 
+    # fuzzy matching returns value between 0 and 100
     return fuzz.ratio(s1, s2) / 100
 
 
