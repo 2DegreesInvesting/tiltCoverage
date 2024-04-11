@@ -1,9 +1,9 @@
 from itertools import product
 from difflib import SequenceMatcher
 
+from .similarity import *
 from . import preprocess_utils as utils
 import pandas as pd
-
 import string
 
 
@@ -24,7 +24,7 @@ def find_common_postcode(df_one: pd.DataFrame, df_two: pd.DataFrame) -> list[str
     # find the intersection -> common postcodes
     postcode_common = set(postcode_one) & set(postcode_two)
 
-    print(f"Found {len(postcode_common)} postcodes in common")
+    print(f">Found {len(postcode_common)} postcodes in common")
 
     # return as list
     return list(postcode_common)
@@ -49,7 +49,7 @@ def alphabetise_company_names(names_dict: dict) -> dict:
     return alpha_dict
 
 
-def create_all_pairs(dict_one, dict_two, alphabet):
+def create_pairs(dict_one, dict_two, alphabet):
     no_alphabet_key = alphabet not in dict_one or alphabet not in dict_two
 
     if no_alphabet_key:
@@ -110,12 +110,17 @@ def find_matching_pairs(pair_list: list, threshold_score: float = 0.9) -> list:
             continue
 
         # create string matcher to check for name similarity
-        matcher = SequenceMatcher(None, t[0], o[0])
-        score = matcher.ratio()
+        # matcher = SequenceMatcher(None, t[0], o[0])
+        # score = matcher.ratio()
+
+        score = get_jaro_winkler_similarity(t[0], o[0])
 
         # if name similarity score above threshold score, consider a match
         if score > threshold_score:
-            matches.append((t, o))
+            matches.append((t, o, score))
+
+        else:
+            elim += 1
 
     if elim == len(pair_list):
         print(f">Eliminated all")
@@ -155,7 +160,7 @@ def find_matching_companies(
 
     pairs = []
     for letter in alphabets:
-        pairs.extend(create_all_pairs(names_dict_tilt, names_dict_other, letter))
+        pairs.extend(create_pairs(names_dict_tilt, names_dict_other, letter))
 
     # find matching companies based on company name and postcode
     print("Finding matching companies")
@@ -165,7 +170,7 @@ def find_matching_companies(
 
     # retrieve companies_id of matched_pairs
     # TODO: can optimise by taking care of it in find_matching_pairs
-    for tilt, other in matched_companies_ids:
+    for tilt, other, _ in matched_companies_ids:
         companies_id_tilt = tilt[-1]
         companies_id_other = other[-1]
 

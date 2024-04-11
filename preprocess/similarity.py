@@ -83,14 +83,16 @@ def get_weighted_similarity_scores(s1: str, s2: str, weights: List[float]) -> fl
     Args:
         s1 (str): First string to compare
         s2 (str): Second string to compare
-        weights (List[float]): Weights to assign to the different similarity scores, each value in the list must be between 0 and 1. [Levenshtein, Jaro Winkler, Fuzzy, Cosine].
+        weights (List[float]): Weights to assign to the different similarity scores, each value in the list must be between 0 and 1, and the values of the list must add up to 1. [Levenshtein, Jaro Winkler, Fuzzy, Cosine].
 
     Returns:
         float: Weighted similarity score.
     """
+    assert sum(weights) == 1, "Sum of weights do not add up to 1"
+
     l = get_levenshtein_similarity(s1, s2)
     j = get_jaro_winkler_similarity(s1, s2)
     f = get_fuzzy_similarity(s1, s2)
     c = get_cosine_similarity(s1, s2)
 
-    return np.matmul([l, j, f, c] * weights)
+    return np.matmul([l, j, f, c], weights)

@@ -123,6 +123,9 @@ def clean_orbis_export(list_df: list[pd.DataFrame], mapper_dir: str) -> pd.DataF
     # rename columns for readability
     orbis.rename(columns=name_mapper, inplace=True)
 
+    # lower case all company names
+    orbis["company_name"] = orbis["company_name"].apply(lambda x: x.lower())
+
     return orbis
 
 
