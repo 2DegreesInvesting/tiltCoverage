@@ -2,6 +2,9 @@ from Levenshtein import distance, jaro_winkler
 from thefuzz import fuzz
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
+from typing import List
+
+import numpy as np
 
 
 def get_levenshtein_similarity(s1: str, s2: str) -> float:
@@ -72,3 +75,22 @@ def get_cosine_similarity(
     e1, e2 = embeddings[0], embeddings[1]
 
     return cosine_similarity(e1, e2)
+
+
+def get_weighted_similarity_scores(s1: str, s2: str, weights: List[float]) -> float:
+    """Calculate weighted similarity score between two strings.
+
+    Args:
+        s1 (str): First string to compare
+        s2 (str): Second string to compare
+        weights (List[float]): Weights to assign to the different similarity scores, each value in the list must be between 0 and 1. [Levenshtein, Jaro Winkler, Fuzzy, Cosine].
+
+    Returns:
+        float: Weighted similarity score.
+    """
+    l = get_levenshtein_similarity(s1, s2)
+    j = get_jaro_winkler_similarity(s1, s2)
+    f = get_fuzzy_similarity(s1, s2)
+    c = get_cosine_similarity(s1, s2)
+
+    return np.matmul([l, j, f, c] * weights)
