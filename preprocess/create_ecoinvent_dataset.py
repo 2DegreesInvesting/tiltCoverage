@@ -1,6 +1,6 @@
-from .match_companies import join_orbis_tilt, join_ecoinvent_tilt
+from .match_companies import match_with_tilt, join_ecoinvent_tilt
 
-from . import preprocess_utils as utils
+from . import utils
 import pandas as pd
 import numpy as np
 
@@ -62,9 +62,9 @@ def create_orbis_ecoinvent_dataset(
 
     ecoinvent_tilt = join_ecoinvent_tilt(tilt, ecoinvent)
 
-    orbis_tilt = join_orbis_tilt(ecoinvent_tilt, orbis)
+    orbis_tilt = match_with_tilt(ecoinvent_tilt, orbis)
 
-    orbis_tilt_companies_id = orbis_tilt["companies_id_orbis"].unique()
+    orbis_tilt_companies_id = orbis_tilt["companies_id_other"].unique()
     df_test_input = orbis[~orbis.companies_id.isin(orbis_tilt_companies_id)]
 
     df_train_input, df_val_input = create_train_val_split(orbis_tilt, validation_split)
@@ -85,6 +85,43 @@ def create_orbis_ecoinvent_dataset(
         save_dataset(df_input, df_labels, split, save_dir)
 
 
+def create_companyinfo_dataset(
+    data_dir: str, save_dir: str, validation_split: float = 0.3
+):
+    """Create training, validation, test dataset
+
+    Args:
+        data_dir (str): _description_
+        validation_split (float, optional): _description_. Defaults to 0.3.
+
+    Returns:
+        _type_: _description_
+    """
+    ci_filename = f"{data_dir}/companyinfo.csv"
+    companyinfo = pd.read_csv(ci_filename)
+
+    tilt_filename = f"{data_dir}/tilt_cpc_isic.csv"
+    tilt = pd.read_csv(tilt_filename)
+
+    companyinfo_tilt = match_with_tilt(tilt, companyinfo)
+
+    df_train_input, df_val_input = create_train_val_split(
+        companyinfo_tilt, validation_split
+    )
+
+    df_train_labels = get_multi_labels(df_train_input, tilt)
+    df_val_labels = get_multi_labels(df_val_input, tilt)
+
+    dataset_df = {
+        "train": (df_train_input, df_train_labels),
+        "val": (df_val_input, df_val_labels),
+    }
+
+    for split in dataset_df:
+        df_input, df_labels = dataset_df[split]
+        save_dataset(df_input, df_labels, split, save_dir)
+
+
 def save_dataset(df_input, df_labels, split, save_dir):
 
     dataset = create_ecoinvent(df_input, df_labels)
@@ -99,7 +136,8 @@ def create_ecoinvent(df, labels=None):
     x = utils.exclude_col(
         df,
         [
-            "companies_id",
+            "companies_id_tilt",
+            "companies_id_other",
             "postcode",
         ],
     ).to_json(orient="records")
@@ -113,29 +151,3 @@ def create_ecoinvent(df, labels=None):
 
         assert len(x) == len(labels), "Something went wrong with x and y"
     return dataset
-
-
-def create_ecoinvent_data_orbis(
-    df_train_input, df_train_labels, df_val_input, df_val_labels, df_test, save_dir: str
-):
-    dataset_df = {
-        "train": (df_train_input, df_train_labels),
-        "val": (df_val_input, df_val_labels),
-        "test": df_test,
-    }
-
-    for split in dataset_df:
-
-        if split == "test":
-            df_input = dataset_df[split]
-            dataset = create_ecoinvent(df_input)
-
-        else:
-            df_input, df_labels = dataset_df[split]
-
-            dataset = create_ecoinvent(df_input, df_labels)
-        filename = f"{save_dir}/orbis_ecoinvent_{split}_dataset.json"
-
-        utils.write_json(filename, dataset)
-
-        print(f"Saved {split} dataset in {filename}")
