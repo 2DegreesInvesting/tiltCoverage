@@ -25,21 +25,23 @@ def create_train_val_split(
     return train_df, val_df
 
 
-def get_multi_labels(df_input, df_labels):
+def get_multi_labels(df_input, df_labels, label_col):
     cid_tilt = df_input.companies_id_tilt
 
     def get_cid_rows(cid):
         return df_labels[df_labels.companies_id == cid]
 
     labels = [
-        get_cid_rows(cid)["activity_id_product_id"].unique().tolist()
+        get_cid_rows(cid)[label_col].apply(lambda x: str(x)).unique().tolist()
         for cid in cid_tilt
     ]
 
     return labels
 
 
-def create_orbis_ecoinvent_dataset(data_dir: str, validation_split: float = 0.3):
+def create_orbis_ecoinvent_dataset(
+    data_dir: str, save_dir: str, validation_split: float = 0.3
+):
     """Create training, validation, test dataset
 
     Args:
@@ -66,20 +68,31 @@ def create_orbis_ecoinvent_dataset(data_dir: str, validation_split: float = 0.3)
     df_test_input = orbis[~orbis.companies_id.isin(orbis_tilt_companies_id)]
 
     df_train_input, df_val_input = create_train_val_split(orbis_tilt, validation_split)
-    df_train_labels = get_multi_labels(df_train_input, ecoinvent_tilt)
-    df_val_labels = get_multi_labels(df_val_input, ecoinvent_tilt)
 
-    print(f"Trianing set has {len(df_train_input)} rows")
-    print(f"Validation set has {len(df_val_input)} rows")
-    print(f"Test set has {len(df_test_input)} rows")
+    label_col = "activity_id_product_id"
+    df_train_labels = get_multi_labels(df_train_input, ecoinvent_tilt, label_col)
+    df_val_labels = get_multi_labels(df_val_input, ecoinvent_tilt, label_col)
 
-    df_train_input.to_csv(f"{data_dir}/orbis_train.csv", index=False)
-    utils.write_json(f"{data_dir}/orbis_train_labels.json", df_train_labels)
-    df_val_input.to_csv(f"{data_dir}/orbis_val.csv", index=False)
-    utils.write_json(f"{data_dir}/orbis_val_labels.json", df_val_labels)
-    df_test_input.to_csv(f"{data_dir}/orbis_test.csv", index=False)
+    dataset_df = {
+        "train": (df_train_input, df_train_labels),
+        "val": (df_val_input, df_val_labels),
+        "test": (df_test_input, None),
+    }
 
-    return df_train_input, df_train_labels, df_val_input, df_val_labels, df_test_input
+    for split in dataset_df:
+        df_input, df_labels = dataset_df[split]
+
+        save_dataset(df_input, df_labels, split, save_dir)
+
+
+def save_dataset(df_input, df_labels, split, save_dir):
+
+    dataset = create_ecoinvent(df_input, df_labels)
+    filename = f"{save_dir}/ci_ecoinvent_{split}_dataset.json"
+
+    utils.write_json(filename, dataset)
+    print(f"{split} dataset has {len(df_input)} rows")
+    print(f"Saved {split} dataset in {filename}")
 
 
 def create_ecoinvent(df, labels=None):
