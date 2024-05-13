@@ -1,7 +1,7 @@
 from match_companies import find_matching_companies
 from dotenv import load_dotenv
 
-import preprocess_utils as utils
+from . import utils
 import pandas as pd
 
 import sys
