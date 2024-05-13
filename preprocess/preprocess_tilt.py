@@ -1,7 +1,7 @@
 import pandas as pd
 from dotenv import load_dotenv
 
-from . import preprocess_utils as utils
+from . import utils
 import pandas as pd
 
 import sys
@@ -12,11 +12,16 @@ import argparse
 NL_COUNTRY_ID = "6ace185eedb813fe84c2eca7641f9fa0aa3bfdc3"
 
 
-def all_files_exist(data_dir: str) -> bool:
+def all_files_exist(data_dir, res_dir, save_dir) -> bool:
     """Checks that all the necessary tilt files exist"""
+    # create save directory if doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
 
     print("Checking that all the necessary files exist")
     if not utils.tilt_data_files_exist(data_dir):
+        return False
+
+    if not utils.ecoinvent_resource_files_exist(res_dir):
         return False
 
     return True
@@ -44,9 +49,9 @@ def read_csv(table_name: str, data_dir: str, columns: list[str] = []) -> pd.Data
 
     # if usecol columns are specified
     if len(columns) > 0:
-        return pd.read_csv(filename, usecols=columns)
+        return pd.read_csv(filename, usecols=columns, dtype={"postcode": "str"})
 
-    return pd.read_csv(filename)
+    return pd.read_csv(filename, dtype={"postcode": "str"})
 
 
 def format_postcode(postcode: str) -> str:
@@ -77,7 +82,7 @@ def format_postcode(postcode: str) -> str:
     return postcode
 
 
-def unify_postcode(tilt: pd.DataFrame) -> pd.DataFrame:
+def check_postcode(orig_postcode, orig_city):
     """Clean up inconsistent postcode and city format
 
     Args:
@@ -86,74 +91,25 @@ def unify_postcode(tilt: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Input DataFrame with 'postcode' and 'company_city' cleaned up.
     """
+    # if city and postcode the same, just take one as reference
+    if orig_postcode == orig_city:
+        reference = orig_postcode
 
-    # turn the columns into lists
-    orig_postcode_list = tilt.postcode.to_list()
-    orig_city_list = tilt.company_city.to_list()
+    # otherwise take concatenation as reference
+    else:
+        reference = f"{orig_postcode}{orig_city}"
 
-    new_postcode_list = []
-    new_city_list = []
+    # if only city name, postcode is NA and and keep the city as is
+    if reference in ["etten-leur", "kruiningen"]:
+        return pd.NA
 
-    # iterate over the poscodes and cities
-    for i, orig_postcode in enumerate(orig_postcode_list):
-        orig_city = orig_city_list[i]
+    elif reference.isnumeric():
+        return pd.NA
 
-        # if city and postcode the same, just take one as reference
-        if orig_postcode == orig_city:
-            ref = orig_postcode
+    # split "properly"
+    orig_postcode = reference.split(maxsplit=1)[0]
 
-        # otherwise take concatenation as reference
-        else:
-            ref = f"{orig_postcode}{orig_city}"
-
-        # if only city name, postcode is NA and and keep the city as is
-        if ref in ["etten-leur", "kruiningen"]:
-            new_postcode_list.append(pd.NA)
-            new_city_list.append(ref)
-            continue
-
-        elif ref.isnumeric():
-            continue
-
-        # split "properly"
-        orig_postcode, orig_city = ref.split(maxsplit=1)
-
-        if "nederland" in orig_city:
-            orig_city = orig_city.split(",")[0]
-
-        new_postcode_list.append(format_postcode(orig_postcode))
-        new_city_list.append(orig_city)
-
-    # assign as new postcode and city lists
-    tilt.postcode = new_postcode_list
-    tilt.company_city = new_city_list
-
-    return tilt
-
-
-def get_ecoinvent_sectors(data_dir: str) -> pd.DataFrame:
-    """Get DataFrame of ecoinvent sectors
-
-    Args:
-        data_dir (str): _description_
-
-    Returns:
-        pd.DataFrame: _description_
-    """
-    ecoinvent_sectors = read_csv("sector_ecoinvent_delimited", data_dir)
-    categories_ecoinvent_sectors = read_csv(
-        "categories_sector_ecoinvent_delimited",
-        data_dir,
-        ["categories_id", "sector_ecoinvent_delimited_id"],
-    )
-
-    ecoinvent_sectors = pd.merge(
-        categories_ecoinvent_sectors,
-        ecoinvent_sectors,
-        on="sector_ecoinvent_delimited_id",
-    )
-
-    return ecoinvent_sectors
+    return format_postcode(orig_postcode)
 
 
 def get_tilt_main_activity(data_dir: str) -> pd.DataFrame:
@@ -188,73 +144,7 @@ def get_tilt_main_activity(data_dir: str) -> pd.DataFrame:
     return main_activity
 
 
-def merge_ep_subsectors(company_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge multiple rows of subsectors for each company into one row of a list
-    of subsectors.
-
-    Args:
-        company_df (pd.DataFrame): _description_
-
-    Returns:
-        pd.DataFrame: _description_
-    """
-
-    subsectors = company_df[["companies_id", "tilt_subsector"]].to_dict("records")
-
-    subsector_dict = {}
-
-    for item in subsectors:
-        company = item["companies_id"]
-        subs = item["tilt_subsector"]
-
-        if company in subsector_dict:
-            if subs in subsector_dict[company]:
-                continue
-            else:
-                subsector_dict[company].append(subs)
-        else:
-            subsector_dict[company] = [subs]
-
-    subsectors = []
-
-    for company in subsector_dict:
-        subsectors.append(
-            {"companies_id": company, "tilt_subsector": subsector_dict[company]}
-        )
-
-    df_tilt_subsectors = pd.DataFrame(subsectors)
-
-    return df_tilt_subsectors
-
-
-def get_tilt_sector_subsector(data_dir: str, res_dir: str) -> pd.DataFrame:
-    """Get the sector and subsector table for tilt
-
-    Args:
-        data_dir (str): Directory where to find the sector table
-        res_dir (str): _description_
-
-    Returns:
-        pd.DataFrame: _description_
-    """
-
-    list_sector_subsector = read_csv(
-        "EP_tilt_sector_mapper",
-        res_dir,
-        ["categories_id", "tilt_sector", "tilt_subsector"],
-    )
-    sector_to_companies = read_csv(
-        "categories_companies", data_dir, ["categories_id", "companies_id"]
-    )
-
-    sector_to_companies = pd.merge(
-        sector_to_companies, list_sector_subsector, on="categories_id"
-    )
-
-    return sector_to_companies
-
-
-def preprocess_tilt(data_dir, res_dir, save_dir):
+def preprocess_tilt(data_dir):
 
     # load tilt company data
     companies = read_csv("companies", data_dir)
@@ -278,21 +168,6 @@ def preprocess_tilt(data_dir, res_dir, save_dir):
         dutch_companies, tilt_main_activity, on="main_activity_id"
     )
 
-    # load and merge tilt sector_subsector
-    sector_to_companies = get_tilt_sector_subsector(data_dir, res_dir)
-    dutch_companies = pd.merge(dutch_companies, sector_to_companies, on="companies_id")
-
-    # load and merge ecoinvent sectors
-    ecoinvent_sectors = get_ecoinvent_sectors(data_dir)
-    dutch_companies = pd.merge(dutch_companies, ecoinvent_sectors, on="categories_id")
-
-    # merge tilt subsectors into a list
-    df_tilt_subsectors = merge_ep_subsectors(dutch_companies)
-    dutch_companies = utils.exclude_col(dutch_companies, ["tilt_subsector"])
-    dutch_companies.drop_duplicates(inplace=True)
-
-    dutch_companies = pd.merge(dutch_companies, df_tilt_subsectors, on="companies_id")
-
     dutch_companies = utils.exclude_col(
         dutch_companies,
         [
@@ -303,8 +178,125 @@ def preprocess_tilt(data_dir, res_dir, save_dir):
         ],
     )
 
-    dutch_companies = unify_postcode(dutch_companies)
-    dutch_companies.to_csv(f"{save_dir}/tilt.csv", index=False)
+    dutch_companies.drop_duplicates(inplace=True)
+
+    dutch_companies["postcode"] = dutch_companies.apply(
+        lambda x: check_postcode(x["postcode"], x["company_city"]), axis=1
+    )
+
+    return dutch_companies
+
+
+def get_europages_ecoinvent_mapper(res_dir: str) -> pd.DataFrame:
+    """Join EuroPages company (NL) table with ecoinvent mapper table
+
+    Args:
+        res_dir (str): Directory where the EuroPages and ecoinvent tables can be found
+
+    Returns:
+        pd.DataFrame: EuroPages joined with ecoinvent mapper table containing colums
+            'companies_id' and 'activity_uuid_product_uuid'
+    """
+
+    ep_ei_mapper = pd.read_csv(f"{res_dir}/20231121_mapper_ep_ei.csv")
+
+    # focus on NL only
+    ep_ei_mapper = ep_ei_mapper[ep_ei_mapper.ep_country == "netherlands"]
+
+    ep_companies = pd.read_csv(f"{res_dir}/ep_companies_NL.csv")
+
+    # generate primary key 'group_var' to join tables
+    ep_companies["group_var"] = (
+        ep_companies["clustered"]
+        + "-.-"
+        + ep_companies["country"]
+        + "-.-"
+        + ep_companies["main_activity"]
+    )
+
+    # join on primary key 'group_var'
+    ep_ei_mapper = pd.merge(ep_companies, ep_ei_mapper, on="group_var").dropna(
+        subset=["completion"]
+    )
+
+    # convert GPT certainty labels to numeric values
+    # completion_mapper = {"low": 1, "medium": 2, "high": 3}
+    # ep_ei_mapper["completion"] = ep_ei_mapper["completion"].apply(
+    # lambda x: completion_mapper[x]
+    # )
+
+    # only keep rows with the highest certainty (highest may still be 'low')
+    # there are still at least one activity_uuid_product_uuid per company
+    # ep_ei_mapper = pd.DataFrame(
+    #     ep_ei_mapper.groupby(["companies_id", "activity_uuid_product_uuid"])[
+    #         "completion"
+    #     ]
+    #     .max()
+    #     .reset_index()
+    # )
+
+    ep_ei_mapper = ep_ei_mapper[ep_ei_mapper["completion"] == "high"]
+
+    # only keey id columns
+    ep_ei_mapper = ep_ei_mapper[["companies_id", "activity_uuid_product_uuid"]]
+
+    return ep_ei_mapper
+
+
+def get_ecoinvent_data(res_dir: str) -> pd.DataFrame:
+    ei_data = pd.read_csv(f"{res_dir}/ecoinvent_complete.csv").rename(
+        columns={
+            "Activity UUID & Product UUID": "activity_uuid_product_uuid",
+            "ISIC Classification": "isic_descr",
+            "isic_4digit": "isic_code",
+            "ISIC Section": "isic_section",
+            "CPC Classification": "cpc",
+            "Geography": "geo",
+        }
+    )
+
+    # only keep relevant columns
+    ei_data = ei_data[
+        [
+            "activity_uuid_product_uuid",
+            "isic_code",
+            "isic_descr",
+            "cpc",
+            "isic_section",
+        ]
+    ]
+
+    return ei_data
+
+
+def clean_cpc_isic_col(df):
+    df["cpc_code"] = df["cpc"].apply(lambda x: x.split(":")[0].strip())
+    df["cpc_descr"] = df["cpc"].apply(lambda x: x.split(":", maxsplit=1)[-1].strip())
+
+    df["isic_descr"] = df["isic_descr"].apply(
+        lambda x: x.split(":", maxsplit=1)[-1].strip()
+    )
+
+    return df.drop(columns=["isic_code", "isic_section", "cpc"])
+
+
+def preprocess_ecoinvent(res_dir: str):
+
+    # get europages ecoinvent mapper
+    print("Getting EuroPages-ecoinvent mapper")
+    ep_ei_mapper = get_europages_ecoinvent_mapper(res_dir)
+
+    ei_df = get_ecoinvent_data(res_dir)
+
+    # map ecoinvent activities and products to europages companies_id
+    print("Mapping ecoinvent activities and products to EuroPages companies")
+
+    ep_ei_companies = pd.merge(ei_df, ep_ei_mapper, on="activity_uuid_product_uuid")
+    ep_ei_companies.drop(columns=["activity_uuid_product_uuid"], inplace=True)
+
+    ep = clean_cpc_isic_col(ep_ei_companies)
+
+    return ep
 
 
 def run(data_dir: str, res_dir: str, save_dir: str):
@@ -317,11 +309,17 @@ def run(data_dir: str, res_dir: str, save_dir: str):
     """
 
     # check that the necessary files exist
-    if not all_files_exist(data_dir=data_dir):
+    if not all_files_exist(data_dir, res_dir, save_dir):
         print("You're missing files to run preprocessing")
         sys.exit(0)
 
-    preprocess_tilt(data_dir, res_dir, save_dir)
+    ep = preprocess_tilt(data_dir)
+    ei = preprocess_ecoinvent(res_dir=res_dir)
+
+    ep = pd.merge(ep, ei, on="companies_id", how="inner")
+    ep = ep.drop_duplicates()
+
+    ep.to_csv(f"{save_dir}/tilt_cpc_isic.csv", index=False)
 
 
 if __name__ == "__main__":
