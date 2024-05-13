@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 
-from . import preprocess_utils as utils
+from . import utils
 import pandas as pd
 
 import os
