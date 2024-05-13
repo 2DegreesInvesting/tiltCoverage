@@ -43,6 +43,9 @@ class EcoinventRetriever:
             if self.embedder_model == "text-embedding-3-small":
 
                 self.embedding_size = 1536  # TODO: could change it to a different size as input to the API call
+
+            elif self.embedder_model == "text-embedding-3-large":
+                self.embedding_size = 3072
         else:
             if self.embedder_model.startswith("sentence-transformer"):
 
