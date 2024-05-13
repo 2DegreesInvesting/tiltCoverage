@@ -47,7 +47,9 @@ def read_in_companyinfo_export(data_dir: str) -> pd.DataFrame:
             continue
 
         # file expected to be in the following format
-        df = pd.read_excel(filename)[keep_cols]
+        df = pd.read_excel(
+            filename, dtype={"Kamer_van_Koophandel_nummer_12-cijferig": "str"}
+        )[keep_cols]
 
         read.append(df)
 
@@ -85,7 +87,11 @@ def clean_companyinfo_export(ci_df) -> pd.DataFrame:
         axis=1,
     )
 
-    return ci_df.drop(columns=["institution_name", "statutory_name"])
+    ci_df.drop(columns=["institution_name", "statutory_name"], inplace=True)
+
+    ci_df["isic"] = ci_df["sbi"].apply(lambda x: x[:4])
+
+    return ci_df
 
 
 def run(data_dir, save_dir):
