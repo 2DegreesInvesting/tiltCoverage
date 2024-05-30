@@ -1,9 +1,8 @@
 huggingface-hub==0.21.3
-python==3.9.18
 python-dotenv==1.0.1
 pandas==2.2.1
 openpyxl==3.1.2
 torch==2.2.1
 sentence-transformers==2.5.1
-haystack-ai==2.0.0
-openai==1.13.1
+farm-haystack[inference]
+openai==1.13.3
