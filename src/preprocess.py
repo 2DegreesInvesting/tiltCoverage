@@ -1,4 +1,3 @@
-
 import pandas as pd
 import os
 
@@ -22,7 +21,7 @@ def read_in_companyinfo_export(data_dir: str) -> pd.DataFrame:
         "Vestigingsadres_postcode",
         "Vestigingsadres_plaats",
         "SBI-code_locatie",
-        "SBI-code_locatie_Omschrijving"
+        "SBI-code_locatie_Omschrijving",
     ]
 
     print(f"Reading in company.info data files in {data_dir}")
@@ -50,7 +49,6 @@ def read_in_companyinfo_export(data_dir: str) -> pd.DataFrame:
                 "Kamer_van_Koophandel_nummer_12-cijferig": "str",
                 "SBI-code": "str",
             },
-            
         )[keep_cols]
 
         read.append(df)
@@ -77,7 +75,16 @@ def read_in_companyinfo_export(data_dir: str) -> pd.DataFrame:
     return ci
 
 
-def clean_companyinfo_export(ci_df) -> pd.DataFrame:
+def merge_company_names(ci_df: pd.DataFrame) -> pd.DataFrame:
+    """CompanyInfo has institution and statutory names. We keep statutory names
+    where available, and institution name otherwise.
+
+    Args:
+        ci_df (pd.DataFrame): DataFrame of raw CompanyInfo data.
+
+    Returns:
+        pd.DataFrame: DataFrame of CompanyInfo data with the company name merged.
+    """
     ci_df["company_name"] = ci_df.apply(
         lambda x: (
             x["statutory_name"].lower()
@@ -87,13 +94,12 @@ def clean_companyinfo_export(ci_df) -> pd.DataFrame:
         axis=1,
     )
 
-    ci_df["isic_code"] = ci_df["sbi_code"].apply(lambda x: str(x)[:4])
-    ci_df.drop(columns=["institution_name", "statutory_name", "sbi_code"], inplace=True)
+    ci_df.drop(columns=["institution_name", "statutory_name"], inplace=True)
 
     return ci_df
 
 
 def run_preprocessing(input_dir, save_dir):
     ci_df = read_in_companyinfo_export(input_dir)
-    ci_df = clean_companyinfo_export(ci_df)
+    ci_df = merge_company_names(ci_df)
     ci_df.to_csv(f"{save_dir}/companyinfo.csv", index=False)
