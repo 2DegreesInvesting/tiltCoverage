@@ -1,15 +1,19 @@
 import pandas as pd
 import os
 
+import utils
+
 
 def read_in_companyinfo_export(data_dir: str) -> pd.DataFrame:
     """Read in Company.info export files from the given data directory.
+
+    Read in Company.info export files, select and rename relevant columns.
 
     Args:
         data_dir (str): Directory where we can find the export files.
 
     Returns:
-        pd.DataFrame:
+        pd.DataFrame: Company.info in DataFrame with relevant columns.
     """
 
     # Columns to keep
@@ -99,7 +103,16 @@ def merge_company_names(ci_df: pd.DataFrame) -> pd.DataFrame:
     return ci_df
 
 
-def run_preprocessing(input_dir, save_dir):
+def run_preprocessing(input_dir: str, save_dir: str):
+    """Run preprocessing steps for Company.info data.
+
+    Args:
+        input_dir (str): Directory to find Company.info export files.
+        save_dir (str): Directory to save preprocessed Company.info file.
+    """
     ci_df = read_in_companyinfo_export(input_dir)
     ci_df = merge_company_names(ci_df)
     ci_df.to_csv(f"{save_dir}/companyinfo.csv", index=False)
+
+    ci_dataset = ci_df.to_dict("records")
+    utils.write_json(f"{save_dir}/companyinfo_dataset.json", ci_dataset)
