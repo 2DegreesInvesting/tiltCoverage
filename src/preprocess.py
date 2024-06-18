@@ -51,7 +51,7 @@ def read_in_companyinfo_export(data_dir: str) -> pd.DataFrame:
             filename,
             dtype={
                 "Kamer_van_Koophandel_nummer_12-cijferig": "str",
-                "SBI-code": "str",
+                "SBI-code_locatie": "str",
             },
         )[keep_cols]
 
