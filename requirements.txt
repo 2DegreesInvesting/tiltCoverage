@@ -4,5 +4,5 @@ pandas==2.2.1
 openpyxl==3.1.2
 torch==2.2.1
 sentence-transformers==2.5.1
-farm-haystack[inference]
+farm-haystack==1.26.2
 openai==1.13.3
