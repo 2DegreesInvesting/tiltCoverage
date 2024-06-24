@@ -108,7 +108,7 @@ class TiltISICRetriever:
             isic_section (str): ISIC section
 
         Returns:
-            Dict[str, str]: _description_
+            Dict[str, str]: ISIC filter statement according to haystack syntax
         """
         # TODO: needs to change to accept multiple ISIC sections for multiple SBIs
         return {"isic": isic_section}
