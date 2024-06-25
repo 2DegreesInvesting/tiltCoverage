@@ -1,3 +1,7 @@
+from haystack_integrations.document_stores.chroma import ChromaDocumentStore
+from haystack.components.embedders import HuggingFaceAPIDocumentEmbedder
+from haystack.components.embedders import OpenAIDocumentEmbedder
+from haystack.utils import Secret
 from haystack import Document
 
 from typing import List, Any, Dict
@@ -6,22 +10,15 @@ import pandas as pd
 import os
 import time
 
-from haystack_integrations.document_stores.chroma import ChromaDocumentStore
-
-from haystack.components.embedders import HuggingFaceAPIDocumentEmbedder
-from haystack.components.embedders import OpenAIDocumentEmbedder
-from haystack.utils import Secret
 
 
 class TiltISICRetriever:
     def __init__(
-        self, provider: str, res_dir: str, doc_store_dir: str, top_k: int = 5
+        self, provider: str, res_dir: str, doc_store_dir: str, top_k: int
     ) -> None:
 
         self.provider = provider
         self.top_k = top_k
-        # Initialise / Load document store with ISIC descriptions for retrieval
-        self.doc_store = self.__get_doc_store(res_dir, doc_store_dir)
 
         # Initialise embedders to embed incoming queries for retrieval
         if provider == "openai":
@@ -29,7 +26,7 @@ class TiltISICRetriever:
             self.env_key = "OPENAI_API_KEY"
 
             self.embedder = OpenAIDocumentEmbedder(
-                api_key=Secret.from_env(self.env_key),
+                api_key=Secret.from_env_var(self.env_key),
                 model=self.model_name,
             )
         else:
@@ -41,8 +38,11 @@ class TiltISICRetriever:
             self.embedder = HuggingFaceAPIDocumentEmbedder(
                 api_type="serverless_inference_api",
                 api_params={"model": self.model_name},
-                token=Secret.from_env(self.env_key),
+                token=Secret.from_env_var(self.env_key),
             )
+
+        # Initialise / Load document store with ISIC descriptions for retrieval
+        self.doc_store = self.__get_doc_store(res_dir, doc_store_dir)
 
     def __get_doc_store(self, res_dir: str, doc_store_dir: str) -> ChromaDocumentStore:
         """_summary_
@@ -113,37 +113,19 @@ class TiltISICRetriever:
         # TODO: needs to change to accept multiple ISIC sections for multiple SBIs
         return {"isic": isic_section}
 
-    def __make_query_document(self, company_info: Dict[str, Any]) -> Document:
-        """Select relevant information and return a Document object with
-        the query as the content and company_id as metadata
-
-        Args:
-            company_info (Dict[str, Any]): Dictionary of company information
-
-        Returns:
-            Document: Document with the query string as the content and company_id as metadata
-        """
-
-        # Get SBI code description and company description (if available)
-        # TODO: needs to change to accept multiple ISIC sections for multiple SBIs
-        sbi_descr = company_info["sbi_code_description"]
-        company_descr = company_info["company_description"] or ""
-
-        # Make query document
-        query = f"{company_descr}; {sbi_descr}"
-        return Document(
-            content=query,
-            meta={"company_id": company_info["company_id"]},
-        )
-
     def __group_by_isic_section(
-        self, list_company_info: List[Dict[str, Any]]
+        self,
+        companies: pd.DataFrame,
+        sbi_activities: pd.DataFrame,
+        companies_sbi_activities: pd.DataFrame,
     ) -> Dict[str, List[Any]]:
         """Transform company information into query documents for retrieval and
         group by the ISIC sections based on the first two digits of the SBI code
 
         Args:
-            list_company_info (List[Dict[str, Any]]): List of company info dictionaries
+            companies (pd.DataFrame): Companies table
+            sbi_activities (pd.DataFrame): SBI activities table
+            companies_sbi_activities (pd.DataFrame): Companies - SBI activities mapper tablelist_company_info (List[Dict[str, Any]]): List of company info dictionaries
 
         Returns:
             Dict[str, List[Any]]: Dictionary of ISIC section codes and list of company query documents
@@ -152,17 +134,26 @@ class TiltISICRetriever:
         # TODO: needs to change to accept multiple ISIC sections for multiple SBIs
         section_groups = {}
 
-        for company_info in list_company_info:
-            # First two digits is the ISIC section
-            section = company_info["sbi_code"][:2]
+        companies = companies[["company_id", "company_description"]]
+        companies = companies.merge(companies_sbi_activities, on="company_id")
+        companies = companies.merge(sbi_activities, on="sbi_code")
+        companies["isic_section"] = companies.sbi_code.apply(lambda x: x[:2])
+        companies["query"] = companies.apply(lambda x: f"{x["sbi_code_description"]}; {x["company_description"] or ""}", axis=1)
+
+        for i, company in companies.iterrows():
 
             # Make query documents out of company information
-            query_document = self.__make_query_document(company_info)
+            query_document = Document(
+                content=company["query"],
+                meta={"company_id": company["company_id"]},
+            )
 
-            if section in section_groups:
-                section_groups[section].append(query_document)
+            query_section = company["isic_section"]
+
+            if query_section in section_groups:
+                section_groups[query_section].append(query_document)
             else:
-                section_groups[section] = [query_document]
+                section_groups[query_section] = [query_document]
 
         return section_groups
 
@@ -183,49 +174,63 @@ class TiltISICRetriever:
         n_docs = len(query_docs)
 
         results = {
-            query_docs[i]["company_id"]: retrieval_results[i] for i in range(n_docs)
+            query_docs[i].meta["company_id"]: [
+                result.id for result in retrieval_results[i]
+            ]
+            for i in range(n_docs)
         }
 
         return results
 
-    def retrieve(self, data: List[Dict[str, Any]]) -> List[Dict[str, List[Document]]]:
+    def retrieve(
+        self,
+        companies: pd.DataFrame,
+        sbi_activities: pd.DataFrame,
+        companies_sbi_activities: pd.DataFrame,
+    ) -> Dict[str, List[Document]]:
         """For each company, retrieve the top_k results for similar ISIC codes
 
         Args:
-            data (List[Dict[str, Any]]): List of company information
+            companies (pd.DataFrame): Companies table
+            sbi_activities (pd.DataFrame): SBI activities table
+            companies_sbi_activities (pd.DataFrame): Companies - SBI activities mapper table
 
         Returns:
-            List[Dict[str, List[Document]]]: List of companies with top_k ISIC codes
+            Dict[str, List[Document]]: List of companies with top_k ISIC codes
         """
 
         # Group the data by ISIC sections
-        data_isic_groups = self.__group_by_isic_section(data)
+        data_isic_groups = self.__group_by_isic_section(
+            companies, sbi_activities, companies_sbi_activities
+        )
 
-        results = []
+        results = {}
+        docs = []
         for isic_section in data_isic_groups:
 
             query_docs = data_isic_groups[isic_section]
-            filter = self.__get_query_filters(isic_section)
+            query_filter = self.__get_query_filters(isic_section)
 
             # Get embeddings of the query documents
-            query_embedding = [
-                doc.embedding for doc in self.embedder.run(query_docs)["documents"]
-            ]
+            embedded_docs = [doc for doc in self.embedder.run(query_docs)["documents"]]
+            query_embedding = [doc.embedding for doc in embedded_docs]
 
             # TODO: where to choose similarity function?
+            # TODO: exception when there are no results returned
             # Get top_k results with the filter
             top_results = self.doc_store.search_embeddings(
-                query_embedding, top_k=self.top_k, filters=filter
+                query_embedding, top_k=self.top_k, filters=query_filter
             )
 
             # Structure the retrieval results neatly
             structured_results = self.__structure_results(query_docs, top_results)
-            results.extend(structured_results)
+            results.update(structured_results)
+            docs.extend(embedded_docs)
 
             # Sleep to avoid reaching rate limit
-            time.sleep(10)
+            time.sleep(3)
 
-        return results
+        return docs, results
 
     def pretty_output(self, results: List[List[Document]]) -> Dict[str, List[List]]:
 
