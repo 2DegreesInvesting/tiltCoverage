@@ -1,0 +1,14 @@
+name: tilt_test
+channels:
+- defaults
+- conda-forge
+dependencies:
+- huggingface-hub=0.21.3
+- python-dotenv=1.0.1
+- pandas=2.2.1
+- openpyx=3.1.2
+- torch=2.2.1
+- sentence-transformers=2.5.1
+- openai=1.13.3
+- chromadb=0.5.3
+- chroma-haystack=0.18.0
