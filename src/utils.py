@@ -1,11 +1,57 @@
 import json
 import os
 import uuid
+import chromadb
+
 import pandas as pd
 
 from dotenv import load_dotenv
 
 import sys
+from haystack_integrations.document_stores.chroma import ChromaDocumentStore
+from haystack_integrations.document_stores.chroma.utils import get_embedding_function
+
+
+class MyChromaDocumentStore(ChromaDocumentStore):
+    def __init__(
+        self,
+        collection_name="documents",
+        embedding_function: str = "default",
+        persist_path=None,
+        **embedding_function_params,
+    ):
+        """
+        Initializes the store. The __init__ constructor is not part of the Store Protocol
+        and the signature can be customized to your needs. For example, parameters needed
+        to set up a database client would be passed to this method.
+
+        Note: for the component to be part of a serializable pipeline, the __init__
+        parameters must be serializable, reason why we use a registry to configure the
+        embedding function passing a string.
+
+        :param collection_name: the name of the collection to use in the database.
+        :param embedding_function: the name of the embedding function to use to embed the query
+        :param persist_path: where to store the database. If None, the database will be `in-memory`.
+        :param embedding_function_params: additional parameters to pass to the embedding function.
+        """
+        # Store the params for marshalling
+        self._collection_name = collection_name
+        self._embedding_function = embedding_function
+        self._embedding_function_params = embedding_function_params
+        self._persist_path = persist_path
+        # Create the client instance
+        if persist_path is None:
+            self._chroma_client = chromadb.Client()
+        else:
+            self._chroma_client = chromadb.PersistentClient(path=persist_path)
+
+        self._collection = self._chroma_client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=get_embedding_function(
+                embedding_function, **embedding_function_params
+            ),
+            metadata={"hnsw:space": "cosine"},
+        )
 
 
 def check_file_extension(filename: str, extension: str):

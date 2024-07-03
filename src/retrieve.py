@@ -1,519 +1,323 @@
 from haystack import Document
-from haystack.document_stores import FAISSDocumentStore
-from haystack.nodes import EmbeddingRetriever
-
-from huggingface_hub import InferenceClient
-
-from openai import OpenAI
 
 from typing import Optional, List, Any, Dict
 
 import pandas as pd
 import numpy as np
+import datetime
 
-import utils
+from haystack.components.embedders import HuggingFaceAPIDocumentEmbedder
+from haystack.components.embedders import OpenAIDocumentEmbedder
+from haystack.utils import Secret
+
+from .retrievers.isic_retriever import run as isic_run
+from .retrievers.cpc_retriever import run as cpc_run
+from .retrievers.activity_retriever import TiltActivityRetriever
+import pickle
 import os
 
+from .utils import write_json, read_json
 
-class LedgerMapper:
-    def __init__(self, res_dir, output_dir):
-        self.isic_retriever = ISICRetriever(res_dir, "openai")
-        self.cpc_retriever = CPCProductRetriever(res_dir, "hf")
-        self.activity_retriever = ActivityRetriever("hf")
-        self.geo_retrieiver = GeoRetriever()
 
-        self.res_dir = res_dir
+# results table:
+# | company_id | isic | cpc | activity | geo |
 
-        self.output_dir = output_dir
+# results.join(ledger, on=[isic, cpc, activity, geo])
 
-    def __structure_isic_output(self, res_dir, preds, scores):
-        isic = pd.read_csv(
-            f"{res_dir}/ISIC_Rev_4_english_structure.Txt", dtype={"Code": "str"}
+# | company_id | ledger_entry_id|
+
+
+def initialise(provider: str, res_dir: str):
+
+    # self.activity_retriever = TiltActivityRetriever(provider, res_dir)
+
+    isic_mapper = pd.read_csv(
+        f"{res_dir}/ISIC_rev_4.csv",
+        dtype={"Code": str, "Description": str},
+    ).to_dict("records")
+    isic_mapper = {item["Code"]: item["Description"] for item in isic_mapper}
+
+    cpc_mapper = pd.read_csv(
+        f"{res_dir}/cpc_ver_2_1.csv", dtype={"Code": str, "Description": str}
+    ).to_dict("records")
+    cpc_mapper = {item["Code"]: item["Description"] for item in cpc_mapper}
+
+    # Initialise embedders to embed incoming queries for retrieval
+    if provider == "openai":
+        model_name = "text-embedding-3-small"
+        env_key = "OPENAI_API_KEY"
+
+        embedder = OpenAIDocumentEmbedder(
+            api_key=Secret.from_env_var(env_key),
+            model=model_name,
         )
-        isic.drop_duplicates(inplace=True)
-        isic = isic.set_index("Code")
-        isic = isic.to_dict()["Description"]
+    else:
+        model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        env_key = "HUGGINGFACEHUB_API_TOKEN"
 
-        preds_descr = [": ".join([p, isic.get(p, "???")]) for p in preds]
-
-        output = [[preds_descr[i], scores[i]] for i in range(len(preds))]
-        return output
-
-    def __structure_cpc_output(self, res_dir, preds, scores):
-        cpc = pd.read_csv(
-            f"{res_dir}/cpc_list.csv",
-            dtype={"cpc": "str"},
-            usecols=["cpc", "description"],
-        )
-
-        cpc.drop_duplicates(inplace=True)
-
-        cpc = cpc.set_index("cpc")
-
-        cpc = cpc.to_dict()["description"]
-
-        preds_descr = [": ".join([p, cpc[p]]) for p in preds]
-
-        output = [[preds_descr[i], scores[i]] for i in range(len(preds))]
-        return output
-
-    def structure_output(self, x, isic, cpc, activity, geo):
-        output = []
-        for i in range(len(x)):
-            output.append(
-                {
-                    "input": x[i],
-                    "output": {
-                        "isic": isic[i],
-                        "cpc": cpc[i],
-                        "activity": activity[i],
-                        "geo": geo[i],
-                    },
-                }
-            )
-
-        return output
-
-    def map_to_ledger(self, x):
-        print(">> ISIC")
-        isic_preds, isic_scores = self.isic_retriever.predict(x)
-        print(">> CPC")
-
-        cpc_preds, cpc_scores = self.cpc_retriever.predict(x)
-        print(">> Activity")
-        act_preds = self.activity_retriever.predict(x, isic_preds)
-        print(">> Geo")
-        geo_preds = self.geo_retrieiver.predict(x)
-
-        isic_results = self.__structure_isic_output(
-            self.res_dir, isic_preds, isic_scores
-        )
-        cpc_results = self.__structure_cpc_output(self.res_dir, cpc_preds, cpc_scores)
-
-        self.output = self.structure_output(
-            x, isic_results, cpc_results, act_preds, geo_preds
+        embedder = HuggingFaceAPIDocumentEmbedder(
+            api_type="serverless_inference_api",
+            api_params={"model": model_name},
+            token=Secret.from_env_var(env_key),
         )
 
-    def save_to_file(self):
-        filename = f"{self.output_dir}/ci_output.json"
-
-        utils.write_json(filename, self.output)
-
-        return filename
+    return embedder, isic_mapper, cpc_mapper
 
 
-class ISICRetriever:
-    def __init__(self, res_dir, provider, embedder_model=None):
-        self.provider = provider
-        self.batch_size = 32
-
-        if not embedder_model:
-            if provider == "openai":
-                self.embedder_model = "text-embedding-3-small"
-            else:
-                self.embedder_model = (
-                    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                )
-        else:
-            self.embedder_model = embedder_model
-
-        print(f"Initialise {self.embedder_model}")
-
-        if provider == "openai":
-            if self.embedder_model == "text-embedding-3-small":
-                self.embedding_size = 1536  # TODO: could change it to a different size as input to the API call
-
-            elif self.embedder_model == "text-embedding-3-large":
-                self.embedding_size = 3072
-        else:
-            if self.embedder_model.startswith("sentence-transformer"):
-
-                self.embedding_size = 384
-            else:
-                self.embedding_size = 768
-
-        self.__get_document_store(res_dir)
-        self.retriever = self.__get_retriever()
-        if not self.load_doc_store:
-
-            doc_store_path = f"{res_dir}/isic_{self.provider}.index"
-            doc_store_config_path = f"{res_dir}/isic_{self.provider}.json"
-            self.doc_store.save(doc_store_path, doc_store_config_path)
-
-    def __get_document_store(self, doc_store_dir):
-        doc_store_path = f"{doc_store_dir}/isic_{self.provider}.index"
-        doc_store_config_path = f"{doc_store_dir}/isic_{self.provider}.json"
-
-        if os.path.isfile(doc_store_path):
-            self.load_doc_store = True
-            self.doc_store = FAISSDocumentStore.load(
-                doc_store_path, doc_store_config_path
-            )
-
-        else:
-            self.load_doc_store = False
-            self.doc_store = FAISSDocumentStore(
-                sql_url=f"sqlite:///{doc_store_dir}/isic_{self.provider}.db",
-                similarity="cosine",
-                embedding_dim=self.embedding_size,
-                return_embedding=True,
-            )
-            self.__init_doc_store(doc_store_dir)
-
-    def __init_doc_store(self, res_dir: str):
-        cpc_list = pd.read_csv(
-            f"{res_dir}/ISIC_Rev_4_english_structure.Txt", dtype={"Code": "str"}
-        )
-
-        documents = [
-            Document(
-                content=row["Description"],
-                id=row["Code"],
-                meta={"isic": row["Code"][:2]},
-            )
-            for i, row in cpc_list.iterrows()
+def process_data_tables(
+    companies,
+    sbi_activities,
+    companies_sbi_activities,
+    products,
+    companies_products,
+):
+    def concatenate_columns(row):
+        values = [
+            row["sbi_code_description"],
+            row["company_description"],
+            row["product_name"],
         ]
+        concatenated = ";".join(filter(pd.notna, values))
+        return concatenated if concatenated else "Not enough information available"
 
-        print(len(documents), "documents in the doc store")
+    companies = companies[
+        ["company_id", "company_description", "country_un"]
+    ].drop_duplicates(subset=["company_id"])
+    companies = companies.merge(companies_sbi_activities, on="company_id", how="left")
+    companies = companies.merge(sbi_activities, on="sbi_code", how="left")
 
-        self.doc_store.write_documents(documents, batch_size=self.batch_size)
+    companies_products = companies_products.merge(products, on="product_id", how="left")
+    companies_products = (
+        companies_products.groupby("company_id")["product_name"]
+        .agg(product_name=", ".join)
+        .reset_index()
+    )
 
-    def __get_retriever(self):
-        retriever = EmbeddingRetriever(
-            embedding_model=self.embedder_model,
-            document_store=self.doc_store,
-            use_gpu=False,
-            # top_k=self.top_k,
-            api_key=os.environ["OPENAI_API_KEY"],
-            openai_organization=os.environ["OPENAI_ORG"],
-            batch_size=self.batch_size,
+    companies = companies.merge(companies_products, on="company_id", how="left")
+
+    companies["query"] = companies.apply(
+        concatenate_columns,
+        axis=1,
+    )
+
+    companies["isic_section"] = companies.sbi_code.apply(
+        lambda x: "None" if pd.isna(x) else x[:2]
+    )
+
+    return companies
+
+
+def get_query_documents(companies: pd.DataFrame) -> List[Document]:
+    query_documents = [
+        Document(
+            content=company["query"],
+            meta={
+                "company_id": company["company_id"],
+                "isic_section": company["isic_section"],
+            },
         )
-        if not self.load_doc_store:
-            retriever.embed_documents(self.doc_store)
-            self.doc_store.update_embeddings(retriever)
+        for _, company in companies.iterrows()
+    ]
 
-        return retriever
-
-    def retrieve(self, query: List[str], filters) -> List[Document]:
-
-        results = self.retriever.retrieve_batch(
-            query, batch_size=self.batch_size, top_k=2498
-        )
-
-        results = self.filter_results(results, filters)
-
-        return results
-
-    def filter_results(self, results, filters):
-        filtered_results = []
-        n = len(results)
-
-        for i in range(n):
-            query_result = results[i]
-            query_filter = filters[i]
-            filtered_query_result = None
-
-            for res in query_result:
-                if res.meta["isic"] == query_filter:
-                    filtered_query_result = res
-                    break
-
-            if not filtered_query_result:
-                raise RuntimeError
-
-            filtered_results.append(filtered_query_result)
-
-        return filtered_results
-
-    def get_isic_filters(self, item):
-        return item["isic_code"][:2]
-
-    def prep_input_fnc(self, info_dict):
-        return info_dict["sbi"]
-
-    def prep_input(self, x):
-        data = [self.prep_input_fnc(item) for item in x]
-
-        filters = [self.get_isic_filters(item) for item in x]
-
-        return data, filters
-
-    def predict(self, batch):
-
-        data, filters = self.prep_input(batch)
-        results = self.retrieve(data, filters)
-        preds = [r.id for r in results]
-        scores = [r.score for r in results]
-
-        assert len(preds) == len(data), "Input and output size do not match"
-
-        return preds, scores
+    return query_documents
 
 
-class GeoRetriever:
-    def __init__(self):
-        pass
+def embed_documents(embedder, query_documents: List[Document]) -> List[Document]:
+    if os.path.isfile("embedded_doc.pkl"):
+        print("> Loading embedding")
+        with open("embedded_doc.pkl", "rb") as f:
+            embedded = pickle.load(f)
 
-    def predict(self, batch):
-        return ["nl"] * len(batch)
+    else:
+        print("> Creating and saving embedding")
+        embedded = [doc for doc in embedder.run(query_documents)["documents"]]
+        with open("embedded_doc.pkl", "wb") as f:
+            pickle.dump(embedded, f)
+
+    return embedded
 
 
-class ActivityRetriever:
+def get_country(companies: pd.DataFrame) -> Dict[str, str]:
+    """For each company, get the country of operation"""
 
-    def __init__(self, provider, embedder_model=None):
+    companies = companies[["company_id", "country_un"]].to_dict("records")
+    companies = {row["company_id"]: row["country_un"] for row in companies}
 
-        self.provider = provider
-        self.batch_size = 4
-        if not embedder_model:
-            if provider == "openai":
-                self.embedder_model = "text-embedding-3-small"
-                self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    return companies
 
-            else:
-                self.embedder_model = "google/flan-t5-xxl"
 
-                self.client = InferenceClient(
-                    model=self.embedder_model,
-                    token=os.environ["HUGGINGFACEHUB_API_TOKEN"],
-                )
+def run(
+    companies: pd.DataFrame,
+    sbi_activities: pd.DataFrame,
+    companies_sbi_activities: pd.DataFrame,
+    products: pd.DataFrame,
+    companies_products: pd.DataFrame,
+    provider,
+    res_dir,
+    doc_store_dir,
+    top_k,
+    save_dir,
+):
+    # Preprocess the data source
+    companies = process_data_tables(
+        companies,
+        sbi_activities,
+        companies_sbi_activities,
+        products,
+        companies_products,
+    )
 
-        self.isic_act_mapper = self.__read_mapper()
+    del sbi_activities, companies_sbi_activities, products, companies_products
+    embedder, isic_mapper, cpc_mapper = initialise(provider, res_dir)
 
-        self.prompt_template = self.__read_prompt_template()
+    predictions = predict(provider, res_dir, companies, embedder, doc_store_dir, top_k)
 
-    def __read_mapper(self):
-        mapper = utils.read_json("data/resources/isic_activity_mapper.json")
+    mapping = map_to_ledger(predictions, isic_mapper, cpc_mapper)
 
-        return mapper
+    to_csv(mapping, save_dir)
 
-    def __read_prompt_template(self):
-        with open("data/resources/activity_prompt.txt") as f:
-            prompt_template = f.read()
 
-        return prompt_template
+def predict(provider, res_dir, companies, embedder, doc_store_dir, top_k):
 
-    def __isic_in_mapper(self, isic_code):
-        if isic_code in self.isic_act_mapper:
-            return True, self.isic_act_mapper[isic_code]
-        elif isic_code[:3] in self.isic_act_mapper:
-            return True, self.isic_act_mapper[isic_code[:3]]
-        elif isic_code[:2] in self.isic_act_mapper:
-            return True, self.isic_act_mapper[isic_code[:2]]
+    query_documents = get_query_documents(companies)
+    # query_documents = None
+    embedded_documents = embed_documents(embedder, query_documents)
 
-        return False, []
+    # print("> ISIC retrieval")
 
-    def __generate(self, prompt):
-        if self.provider == "openai":
-            response = self.client.completions.create(
-                model=self.embedder_model, prompt=prompt
-            )
-            return response["choice"]
+    # isic_results = isic_run(embedded_documents, provider, res_dir, doc_store_dir, top_k)
+
+    # directory = os.fsencode(".")
+
+    # isic_results = {}
+    # for file in os.listdir(directory):
+    #     filename = os.fsdecode(file)
+    #     if filename.startswith("isic_partial_results") and filename.endswith(".json"):
+    #         isic_results.update(read_json(filename))
+
+    isic_results = read_json("isic_results.json")
+
+    print("> CPC retrieval")
+    # For each company, for the given ISIC codes, retrieve top 5 CPC codes
+    # TODO: threshold
+    # cpc_results = cpc_run(
+    #     embedded_documents, isic_results, provider, res_dir, doc_store_dir, top_k
+    # )
+
+    # write_json("cpc_results.json", cpc_results)
+    cpc_results = read_json("cpc_results.json")
+
+    print("> Activity retrieval")
+    activity_retriever = TiltActivityRetriever(provider, res_dir)
+    activity_results = activity_retriever.retrieve(embedded_documents, isic_results)
+
+    country_results = get_country(companies)
+
+    predictions = {
+        "queries": query_documents,
+        "isic": isic_results,
+        "cpc": cpc_results,
+        "activity": activity_results,
+        "geo": country_results,
+    }
+    return predictions
+
+
+def map_to_ledger(predictions, isic_mapper, cpc_mapper):
+    queries = predictions["queries"]
+
+    queries = {doc.meta["company_id"]: doc for doc in queries}
+    isic_results = predictions["isic"]
+    cpc_results = predictions["cpc"]
+    activity_results = predictions["activity"]
+    country_results = predictions["geo"]
+
+    mapping_data = []
+
+    print("Mapping to ledger")
+    # for each company id
+    for company_id in cpc_results:
+
+        query_doc = queries.get(company_id, None)
+
+        if query_doc is None:
+            continue
         else:
-            response = self.client.text_generation(prompt)
-            return response.choice
+            query = query_doc.content
+            query_isic = query_doc.meta["isic_section"]
 
-    def predict(self, batch, isic_preds):
+        # get all the isics for company
+        isic_preds = isic_results[company_id]["preds"]
+        isic_scores = isic_results[company_id]["scores"]
 
-        batch_activity = []
+        # for each cpc result
+        for i in range(len(cpc_results[company_id]["preds"])):
+            # these are the acceptable combinations of cpc and isic
+            cpc_pred, corr_isic = cpc_results[company_id]["preds"][i]
+            cpc_score = cpc_results[company_id]["scores"][i]
 
-        for i, company in enumerate(batch):
-            isic_code = isic_preds[i]
+            for j in range(len(isic_preds)):
 
-            isic_in_mapper, activity = self.__isic_in_mapper(isic_code)
+                for activity in activity_results[company_id]:
+                    mapping_data.append(
+                        (
+                            company_id,
+                            query,
+                            query_isic,
+                            isic_preds[j],
+                            isic_mapper.get(isic_preds[j], "could not find"),
+                            isic_scores[j],
+                            cpc_pred,
+                            cpc_mapper.get(cpc_pred, "could not find"),
+                            cpc_score,
+                            activity,
+                            country_results[company_id],
+                        )
+                    )
 
-            if isic_in_mapper:
-                batch_activity.append(activity)
-                continue
+    # mapper_table = join with ledger table
 
-            if not company["sbi"]:
-                print("huh?")
+    mapping = pd.DataFrame(
+        data=mapping_data,
+        columns=[
+            "company_id",
+            "query",
+            "query_isic_section",
+            "isic_code",
+            "isic_description",
+            "isic_score",
+            "cpc_code",
+            "cpc_description",
+            "cpc_score",
+            "activity",
+            "geo",
+        ],
+    )
 
-            if not company.get("description", ""):
-                print("nuh huh")
-            prompt_input = " ".join([company["sbi"], company.get("description", "")])
-            prompt = self.prompt_template.format(input=prompt_input)
-            output = self.__generate(prompt)
-
-            # batch_activity.append("???")
-
-            # # TODO accept multiple activities
-            if output == "both":
-                batch_activity.append(
-                    ["ordinary transforming activity", "market activity"]
-                )
-            elif output == "transforming activity":
-                batch_activity.append(["ordinary transforming activity"])
-            else:
-                batch_activity.append([output])
-
-        return batch_activity
+    return mapping
 
 
-class CPCProductRetriever:
-    def __init__(
-        self,
-        res_dir,
-        provider,
-        embedder_model=None,
-    ):
-
-        self.provider = provider
-        self.batch_size = 32
-
-        if not embedder_model:
-            if provider == "openai":
-                self.embedder_model = "text-embedding-3-small"
-            else:
-                self.embedder_model = (
-                    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                )
-        else:
-            self.embedder_model = embedder_model
-
-        print(f"Initialise {self.embedder_model}")
-
-        if provider == "openai":
-            if self.embedder_model == "text-embedding-3-small":
-                self.embedding_size = 1536  # TODO: could change it to a different size as input to the API call
-
-            elif self.embedder_model == "text-embedding-3-large":
-                self.embedding_size = 3072
-        else:
-            if self.embedder_model.startswith("sentence-transformer"):
-
-                self.embedding_size = 384
-            else:
-                self.embedding_size = 768
-
-        self.__get_document_store(res_dir)
-        self.retriever = self.__get_retriever()
-        if not self.load_doc_store:
-            model_name = self.embedder_model.split("/")[-1]
-
-            doc_store_path = f"{res_dir}/cpc_{self.provider}_{model_name}.index"
-            doc_store_config_path = f"{res_dir}/cpc_{self.provider}_{model_name}.json"
-            self.doc_store.save(doc_store_path, doc_store_config_path)
-
-    def __get_document_store(self, doc_store_dir):
-        model_name = self.embedder_model.split("/")[-1]
-
-        doc_store_path = f"{doc_store_dir}/cpc_{self.provider}_{model_name}.index"
-        doc_store_config_path = f"{doc_store_dir}/cpc_{self.provider}_{model_name}.json"
-
-        if os.path.isfile(doc_store_path):
-            self.load_doc_store = True
-            self.doc_store = FAISSDocumentStore.load(
-                doc_store_path, doc_store_config_path
-            )
-
-        else:
-            self.load_doc_store = False
-            self.doc_store = FAISSDocumentStore(
-                sql_url=f"sqlite:///{doc_store_dir}/cpc_{self.provider}_{model_name}.db",
-                similarity="cosine",
-                embedding_dim=self.embedding_size,
-                return_embedding=True,
-            )
-            self.__init_doc_store(doc_store_dir)
-
-    def __init_doc_store(self, res_dir: str):
-        cpc_list = pd.read_csv(f"{res_dir}/cpc_list.csv", dtype={"cpc": "str"})
-
-        documents = [
-            Document(
-                content=row["description"], id=row["cpc"], meta={"isic": row["isic"]}
-            )
-            for i, row in cpc_list.iterrows()
+def simplify_output(mapping):
+    return mapping[
+        [
+            "company_id",
+            "isic_code",
+            "isic_score",
+            "cpc_code",
+            "cpc_score",
+            "activity",
+            "geo",
         ]
+    ]
 
-        print(len(documents), "documents in the doc store")
 
-        self.doc_store.write_documents(documents, batch_size=self.batch_size)
+def to_csv(mapping, save_dir):
 
-    def __get_retriever(self):
-        retriever = EmbeddingRetriever(
-            embedding_model=self.embedder_model,
-            document_store=self.doc_store,
-            use_gpu=False,
-            # top_k=self.top_k,
-            api_key=os.environ["OPENAI_API_KEY"],
-            openai_organization=os.environ["OPENAI_ORG"],
-            batch_size=self.batch_size,
-        )
-        if not self.load_doc_store:
-            retriever.embed_documents(self.doc_store)
-            self.doc_store.update_embeddings(retriever)
+    current_date = datetime.datetime.now().strftime("%Y%m%d")
+    ledger_mapping_filepath = f"{save_dir}/{current_date}_ledger_results.csv"
+    ledger_mapping_verbose_filepath = f"{save_dir}/{current_date}_ledger_details.csv"
 
-        return retriever
+    mapping.to_csv(ledger_mapping_verbose_filepath, index=False)
 
-    def retrieve(self, query: List[str], filters) -> List[Document]:
-
-        results = self.retriever.retrieve_batch(
-            query, batch_size=self.batch_size, top_k=2498
-        )
-
-        results = [res[0] for res in results]
-        # results = self.filter_results(results, filters)
-
-        return results
-
-    def filter_results(self, results, filters):
-        filtered_results = []
-        n = len(results)
-
-        for i in range(n):
-            query_result = results[i]
-            query_filter = filters[i]
-            filtered_query_result = None
-
-            for res in query_result:
-                if res.meta["isic"] in query_filter:
-                    filtered_query_result = res
-
-            if not filtered_query_result:
-                raise RuntimeError
-
-            filtered_results.append(filtered_query_result)
-
-        return filtered_results
-
-    def get_isic_filters(self, item):
-        return [item["isic_code"][:2], "na"]
-
-    def prep_input_fnc(self, info_dict):
-        details = [
-            "sbi",
-            "description",
-        ]
-
-        info = []
-        for key in details:
-            descr = info_dict.get(key, None)
-
-            if descr:
-                info.append(descr)
-        return "; ".join(info)
-
-    def prep_input(self, x):
-        data = [self.prep_input_fnc(item) for item in x]
-
-        filters = [self.get_isic_filters(item) for item in x]
-
-        return data, filters
-
-    def description_exists(self, obj):
-        if obj and not isinstance(obj, float):
-            return True
-
-        return False
-
-    def predict(self, batch):
-
-        data, filters = self.prep_input(batch)
-        results = self.retrieve(data, filters)
-        preds = [r.id for r in results]
-        scores = [r.score for r in results]
-
-        assert len(preds) == len(data), "Input and output size do not match"
-
-        return preds, scores
+    simple_mapping = simplify_output(mapping)
+    simple_mapping.to_csv(ledger_mapping_filepath, index=False)

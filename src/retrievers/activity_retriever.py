@@ -68,7 +68,7 @@ class TiltActivityRetriever:
 
             for code in isic_codes:
                 code_act = self.isic_act_mapper.get(code, self.default)
-                activities.union(code_act)
+                activities = activities.union(code_act)
                 if len(activities) > 1:
                     break
 

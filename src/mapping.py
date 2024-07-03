@@ -1,9 +1,8 @@
-from .retrieve import TiltLedgerMapper
+from .retrieve import run
 
 from typing import List
 
 import pandas as pd
-import datetime
 
 
 def read_data_tables(data_dir: str) -> List[pd.DataFrame]:
@@ -50,20 +49,15 @@ def run_ledger_mapping(
     ) = read_data_tables(data_dir)
 
     # Intialise ledger mapper
-    mapper = TiltLedgerMapper(provider, res_dir, doc_store_dir)
-
-    # Make prediction for all four attributes of the ledger
-    mapper.predict(
+    run(
         companies,
         sbi_activities,
         companies_sbi_activities,
         products,
         companies_products,
+        provider,
+        res_dir,
+        doc_store_dir,
+        top_k=3,
+        save_dir=output_dir,
     )
-
-    # Map the companies to ledger entries
-    mapper.map_to_ledger()
-
-    # Save the mapping
-    current_date = datetime.datetime.now().strftime
-    mapper.to_csv(f"{output_dir}/{current_date}_ledger_results.csv")
