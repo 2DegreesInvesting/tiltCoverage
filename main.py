@@ -14,9 +14,11 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="./data/dataset")
     parser.add_argument("--save_dir", type=str, default="./data/output")
     parser.add_argument("--res_dir", type=str, default="./data/resources")
-    parser.add_argument("--doc_store_dir", type=str, default="./data/doc_store")
+    parser.add_argument("--doc_store_dir", type=str, default="./data/my_doc_store")
 
-    parser.add_argument("--provider", type=str, default="hf", choices=["openai", "hf"])
+    parser.add_argument(
+        "--provider", type=str, default="openai", choices=["openai", "hf"]
+    )
 
     load_env_file()
 
