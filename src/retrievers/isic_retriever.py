@@ -160,39 +160,30 @@ def retrieve(
     data_isic_groups = group_by_isic_section(query_documents)
 
     results = {}
-    for isic_section in data_isic_groups:
-
-        if isic_section != "None" and int(isic_section) < 98:
-            continue
+    for isic_section in tqdm(data_isic_groups):
 
         query_docs = data_isic_groups[isic_section]
-        print(len(query_docs))
-        all_query_embedding = [doc.embedding for doc in query_docs]
+        query_embedding = [doc.embedding for doc in query_docs]
 
-        step = 1024
-        for i in tqdm(range(0, len(query_docs) + step, step)):
-            query_embedding = all_query_embedding[i : i + step]
-            # Get embeddings of the query documents
+        # Get embeddings of the query documents
 
-            # TODO: where to choose similarity function?
-            # TODO: exception when there are no results returned
-            # Get top_k results with the filter
+        # TODO: where to choose similarity function?
+        # TODO: exception when there are no results returned
+        # Get top_k results with the filter
 
-            # TODO: every europages one results with NA
-            if isic_section == "None":
-                top_results = doc_store.search_embeddings(query_embedding, top_k=top_k)
-            else:
-                query_filter = get_query_filters(isic_section)
-                top_results = doc_store.search_embeddings(
-                    query_embedding, top_k=top_k, filters=query_filter
-                )
-            if len(top_results) == 0:
-                continue
-            # Structure the retrieval results neatly
-            structured_results = structure_results(
-                query_docs[i : i + step], top_results
+        # TODO: every europages one results with NA
+        if isic_section == "None":
+            top_results = doc_store.search_embeddings(query_embedding, top_k=top_k)
+        else:
+            query_filter = get_query_filters(isic_section)
+            top_results = doc_store.search_embeddings(
+                query_embedding, top_k=top_k, filters=query_filter
             )
-            results.update(structured_results)
+        if len(top_results) == 0:
+            continue
+        # Structure the retrieval results neatly
+        structured_results = structure_results(query_docs, top_results)
+        results.update(structured_results)
 
     return results
 

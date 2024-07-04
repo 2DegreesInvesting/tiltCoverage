@@ -16,6 +16,7 @@ from .retrievers.activity_retriever import TiltActivityRetriever
 import pickle
 import os
 
+from tqdm import tqdm
 from .utils import write_json, read_json
 
 
@@ -80,6 +81,7 @@ def process_data_tables(
         concatenated = ";".join(filter(pd.notna, values))
         return concatenated if concatenated else "Not enough information available"
 
+    companies = companies[companies.source_id.isin(["source_3_ci", "source_4_ep_ci"])]
     companies = companies[
         ["company_id", "company_description", "country_un"]
     ].drop_duplicates(subset=["company_id"])
@@ -180,12 +182,24 @@ def run(
 def predict(provider, res_dir, companies, embedder, doc_store_dir, top_k):
 
     query_documents = get_query_documents(companies)
+    print(len(query_documents))
     # query_documents = None
     embedded_documents = embed_documents(embedder, query_documents)
 
-    # print("> ISIC retrieval")
+    print("Hello?")
+    query_doc_ids = [doc.meta["company_id"] for doc in query_documents]
+    print("yes")
+    embedded_documents = [
+        doc
+        for doc in tqdm(embedded_documents)
+        if doc.meta["company_id"] in query_doc_ids
+    ]
 
-    # isic_results = isic_run(embedded_documents, provider, res_dir, doc_store_dir, top_k)
+    print("done with that")
+
+    print("> ISIC retrieval")
+
+    isic_results = isic_run(embedded_documents, provider, res_dir, doc_store_dir, top_k)
 
     # directory = os.fsencode(".")
 
@@ -195,17 +209,17 @@ def predict(provider, res_dir, companies, embedder, doc_store_dir, top_k):
     #     if filename.startswith("isic_partial_results") and filename.endswith(".json"):
     #         isic_results.update(read_json(filename))
 
-    isic_results = read_json("isic_results.json")
+    # isic_results = read_json("isic_results.json")
 
     print("> CPC retrieval")
     # For each company, for the given ISIC codes, retrieve top 5 CPC codes
     # TODO: threshold
-    # cpc_results = cpc_run(
-    #     embedded_documents, isic_results, provider, res_dir, doc_store_dir, top_k
-    # )
+    cpc_results = cpc_run(
+        embedded_documents, isic_results, provider, res_dir, doc_store_dir, top_k
+    )
 
     # write_json("cpc_results.json", cpc_results)
-    cpc_results = read_json("cpc_results.json")
+    # cpc_results = read_json("cpc_results.json")
 
     print("> Activity retrieval")
     activity_retriever = TiltActivityRetriever(provider, res_dir)

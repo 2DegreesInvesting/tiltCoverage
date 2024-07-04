@@ -24,14 +24,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    run_preprocessing(input_dir=args.input_dir, save_dir=args.data_dir)
+    # run_preprocessing(input_dir=args.input_dir, save_dir=args.data_dir)
 
-    run_ledger_mapping(
-        args.provider,
-        args.data_dir,
-        args.res_dir,
-        args.doc_store_dir,
-        args.save_dir,
-    )
+    # run_ledger_mapping(
+    #     args.provider,
+    #     args.data_dir,
+    #     args.res_dir,
+    #     args.doc_store_dir,
+    #     args.save_dir,
+    # )
 
     run_manual_inspection(args.data_dir, args.res_dir, args.save_dir)
